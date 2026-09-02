@@ -103,11 +103,41 @@ def _require_nonempty_strings(data: dict[str, Any], key: str) -> tuple[str, ...]
     return values
 
 
+def _example_defaults() -> dict[str, Any]:
+    path = _repo_copy_dir() / "responses.example.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("responses.example.json must be a JSON object")
+    return raw
+
+
+def _merge_responses_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Fill missing keys from responses.example.json so operator copy can lag behind code."""
+    merged = dict(_example_defaults())
+    for key, value in data.items():
+        if value is None:
+            continue
+        if isinstance(value, str):
+            if value.strip():
+                merged[key] = value
+        elif isinstance(value, list):
+            if value:
+                merged[key] = value
+        else:
+            merged[key] = value
+    if "llm_rate_replies" not in data or not data.get("llm_rate_replies"):
+        legacy = data.get("llm_rate")
+        if isinstance(legacy, str) and legacy.strip():
+            merged["llm_rate_replies"] = [legacy.strip()]
+    return merged
+
+
 def load_responses(path: str) -> Responses:
     resolved = resolve_responses_path(path)
-    data = json.loads(resolved.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
+    raw = json.loads(resolved.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
         raise ValueError("responses file must be a JSON object")
+    data = _merge_responses_data(raw)
     for key in _REQUIRED_STRINGS:
         value = data.get(key)
         if not isinstance(value, str) or not value.strip():

@@ -45,6 +45,37 @@ def test_missing_file_falls_back_to_example(tmp_path):
     assert bundle.consent_dm == "dm"
 
 
+def test_missing_new_keys_fall_back_to_example(tmp_path):
+    partial = tmp_path / "responses.json"
+    partial.write_text(
+        json.dumps(
+            {
+                "group_roast_chance": 0.25,
+                "consent_dm": "dm",
+                "consent_clarify": "clarify",
+                "opted_in": "in",
+                "declined": "declined",
+                "opted_out": "out",
+                "group_roasts": ["roast"],
+                "help_text": "help",
+                "unknown_replies": ["unknown"],
+                "llm_fail": "fail",
+                "llm_rate": "legacy rate limit",
+                "summarize_in_dm": "summarize",
+                "empty_window": "empty",
+                "dashboard_rate": "dash rate",
+                "dashboard_group": "dash group",
+                "dashboard_dm": "dash {url}",
+                "status_template": "{count} {when}",
+            }
+        ),
+        encoding="utf-8",
+    )
+    bundle = load_responses(str(partial))
+    assert bundle.unopted_group_notice
+    assert bundle.llm_rate_replies == ("legacy rate limit",)
+
+
 def test_init_requires_reset_between_tests():
     reset_responses()
     init_responses("copy/responses.example.json")
