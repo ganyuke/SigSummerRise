@@ -2,7 +2,7 @@
 # SigSummerRise — automated Debian install (bare metal or LXC).
 #
 # Run inside the target host/container as root, from a repo checkout:
-#   git clone <this-repo> /opt/sigsummerrise
+#   git clone https://github.com/ganyuke/SigSummerRise.git /opt/sigsummerrise
 #   cd /opt/sigsummerrise
 #   sudo ./deploy/install-debian.sh --hostname bot.example.com
 #
@@ -33,7 +33,7 @@ usage() {
 SigSummerRise — automated Debian install (bare metal or LXC).
 
 Run inside the target host/container as root, from a repo checkout:
-  git clone <this-repo> /opt/sigsummerrise
+  git clone https://github.com/ganyuke/SigSummerRise.git /opt/sigsummerrise
   cd /opt/sigsummerrise
   sudo ./deploy/install-debian.sh --hostname bot.example.com
 
@@ -278,10 +278,14 @@ Required manual steps:
      Set at least SIGNAL_ACCOUNT, SIGNAL_GROUP_ID, SIGNAL_BOT_ACI,
      PUBLIC_BASE_URL, OPENROUTER_API_KEY, OPENROUTER_MODEL.
 
-  2. List groups (after joining on the phone):
+  2. Customize bot replies (optional):
+       sudo nano ${APP_OPT}/copy/responses.json
+     Created from responses.example.json on first install.
+
+  3. List groups (after joining on the phone):
        sudo -u ${APP_USER} signal-cli --config ${SIGNAL_CLI_CONFIG} -a +E164 listGroups -d
 
-  3. Enable services (after secrets and link are complete):
+  4. Enable services (after secrets and link are complete):
        sudo systemctl enable --now signal-cli sigsummerrise
 EOF
   if [[ "$SKIP_CADDY" -eq 0 ]]; then

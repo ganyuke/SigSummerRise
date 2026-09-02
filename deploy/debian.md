@@ -7,12 +7,12 @@ The bot is a linked Signal device plus a local FastAPI process. Caddy terminates
 Inside a fresh Debian 12+ host or LXC container (systemd, root):
 
 ```bash
-git clone <this-repo> /opt/sigsummerrise
+git clone https://github.com/ganyuke/SigSummerRise.git /opt/sigsummerrise
 cd /opt/sigsummerrise
 sudo ./deploy/install-debian.sh --hostname your.bot.example.com
 ```
 
-The script installs packages, `signal-cli`, the Python app, systemd units, and Caddy. It generates `DB_KEY` in `/etc/sigsummerrise/secrets.env` but leaves Signal/OpenRouter values for you to fill in. If stdin is not a TTY (e.g. `curl | bash`), run the QR link step afterward:
+The script installs packages, `signal-cli`, the Python app, systemd units, and Caddy. It generates `DB_KEY` in `/etc/sigsummerrise/secrets.env` but leaves Signal/OpenRouter values for you to fill in. If stdin is not a TTY, run the QR link step afterward:
 
 ```bash
 sudo /opt/sigsummerrise/deploy/install-debian.sh --link-only
@@ -72,7 +72,7 @@ Copy the group id into `SIGNAL_GROUP_ID` (required; the process will not start w
 ## Application
 
 ```bash
-sudo git clone <this-repo> /opt/sigsummerrise
+sudo git clone https://github.com/ganyuke/SigSummerRise.git /opt/sigsummerrise
 cd /opt/sigsummerrise
 sudo python3 -m venv /opt/sigsummerrise/.venv
 sudo /opt/sigsummerrise/.venv/bin/pip install -e ".[dev]"
