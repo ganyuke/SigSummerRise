@@ -224,7 +224,19 @@ class Bot:
         except llm.LlmError:
             await self._reply(incoming, self.copy.llm_fail, in_group)
             return
-        await self._reply(incoming, answer, in_group)
+        ts = await self._reply(incoming, answer, in_group)
+        if not in_group or ts is None:
+            if in_group and ts is None:
+                log.warning("ask reply sent but signal-cli returned no timestamp; follow-ups will not bind")
+            return
+        summary_id = self.db.save_summary(
+            incoming.group_id or self.settings.signal_group_id,
+            ts,
+            [m.id for m in kept],
+            answer,
+        )
+        self.db.add_thread(summary_id, incoming.sender_aci, question, incoming.timestamp)
+        self.db.add_thread(summary_id, None, answer, ts)
 
     async def _send_dashboard_link(self, incoming: IncomingMessage, now: int, in_group: bool) -> None:
         url = auth.issue_magic_link(self.db, self.settings, incoming.sender_aci, now)

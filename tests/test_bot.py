@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 
+from sigsummerrise import llm
 from sigsummerrise.bot import Bot
 from sigsummerrise.commands import help_text
 from sigsummerrise.responses import get_responses
@@ -461,3 +462,38 @@ async def test_ask_includes_recent_chat_when_available(tmp_db, settings, monkeyp
     )
     assert "Recent chat:" in captured[0]
     assert "pizza" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_ask_quote_reply_without_mention(tmp_db, settings, monkeypatch):
+    calls: list[str] = []
+
+    async def fake_complete(settings, system, user):
+        calls.append(system)
+        return "answer one" if len(calls) == 1 else "answer two"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(
+        _msg(
+            text="@bot who wins",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=100,
+        )
+    )
+    bot_ts = signal.ts
+    await bot.handle(
+        _msg(
+            text="why though",
+            quote_timestamp=bot_ts,
+            timestamp=101,
+            mentioned_uuids=[],
+        )
+    )
+    assert len(calls) == 2
+    assert calls[1] == llm.FOLLOWUP_SYSTEM
+    assert signal.groups[-1][1] == "answer two"

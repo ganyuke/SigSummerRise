@@ -16,7 +16,7 @@
     "Opt in via DM (Yes), then try mentioning me again.",
     "Not opted in yet — open our DM and send Yes."
   ],
-  "help_text": "Mention me in the group with Signal's mention picker (not just typing my name) and say:\n• summarize the past N messages\n• status — how many of your messages I have\n• dashboard — I DM a one-time login link (15 minutes, works once)\n• opt out — deletes your stored messages; DM Yes later to come back\n• help — this list\n• or ask me anything — I use recent chat when it helps\n\nQuote-reply a summary or any reply in that thread to ask a follow-up. No mention needed for that.\nNot opted in? Open a DM with me and send Yes or No.",
+  "help_text": "Mention me in the group with Signal's mention picker (not just typing my name) and say:\n• summarize the past N messages\n• status — how many of your messages I have\n• dashboard — I DM a one-time login link (15 minutes, works once)\n• opt out — deletes your stored messages; DM Yes later to come back\n• help — this list\n• or ask me anything — I use recent chat when it helps\n\nQuote-reply any of my answers (summaries or questions) to keep going. No mention needed for that.\nNot opted in? Open a DM with me and send Yes or No.",
   "unknown_replies": [
     "I didn't recognize that command.",
     "That didn't match any command I know.",
