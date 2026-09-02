@@ -223,17 +223,26 @@ ensure_responses_file() {
 }
 
 ensure_secrets_file() {
-  if [[ -f "$SECRETS_FILE" ]]; then
+  if [[ ! -f "$SECRETS_FILE" ]]; then
+    log "creating ${SECRETS_FILE} from .env.example"
+    cp "${APP_OPT}/.env.example" "$SECRETS_FILE"
+    chmod 0600 "$SECRETS_FILE"
+    chown root:"$APP_GROUP" "$SECRETS_FILE"
+  else
     log "keeping existing ${SECRETS_FILE}"
+  fi
+  local db_key current
+  current=$(grep -E '^DB_KEY=' "$SECRETS_FILE" | cut -d= -f2- || true)
+  if [[ -n "$current" ]]; then
     return
   fi
-  log "creating ${SECRETS_FILE} from .env.example"
-  cp "${APP_OPT}/.env.example" "$SECRETS_FILE"
-  chmod 0600 "$SECRETS_FILE"
-  chown root:"$APP_GROUP" "$SECRETS_FILE"
-  local db_key
+  log "generating DB_KEY"
   db_key=$(openssl rand -base64 48)
-  sed -i "s/^DB_KEY=.*/DB_KEY=${db_key}/" "$SECRETS_FILE"
+  grep -v '^DB_KEY=' "$SECRETS_FILE" > "${SECRETS_FILE}.new"
+  printf 'DB_KEY=%s\n' "$db_key" >> "${SECRETS_FILE}.new"
+  chmod 0600 "${SECRETS_FILE}.new"
+  chown root:"$APP_GROUP" "${SECRETS_FILE}.new"
+  mv "${SECRETS_FILE}.new" "$SECRETS_FILE"
 }
 
 install_systemd_units() {
