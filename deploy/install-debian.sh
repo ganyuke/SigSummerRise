@@ -182,6 +182,10 @@ sync_application() {
   [[ -n "$SOURCE_DIR" ]] || SOURCE_DIR="$(cd "$(script_dir)/.." && pwd)"
   [[ -f "${SOURCE_DIR}/pyproject.toml" ]] \
     || die "source dir does not look like SigSummerRise: ${SOURCE_DIR}"
+  if [[ "$(readlink -f "${SOURCE_DIR}")" == "$(readlink -f "${APP_OPT}")" ]]; then
+    log "using in-place checkout at ${APP_OPT} (ownership unchanged)"
+    return
+  fi
   log "syncing application from ${SOURCE_DIR} to ${APP_OPT}"
   rsync -a \
     --exclude .git \
@@ -190,7 +194,8 @@ sync_application() {
     --exclude .pytest_cache \
     --exclude '*.pyc' \
     "${SOURCE_DIR}/" "${APP_OPT}/"
-  chown -R "${APP_USER}:${APP_GROUP}" "$APP_OPT"
+  # Code can stay root-owned; the service user only needs read/execute.
+  install -d -m 0755 "${APP_OPT}/copy"
 }
 
 install_python_env() {
