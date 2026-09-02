@@ -270,34 +270,10 @@ signal_cli_linked() {
   find "$SIGNAL_CLI_CONFIG" -name 'accounts.json' -print -quit 2>/dev/null | grep -q .
 }
 
-run_signal_link() {
-  local out uri png link_pid
-  log "linking signal-cli as a dedicated bot device"
-  printf '\nScan the QR on the bot phone: Settings → Linked devices → Link device.\n\n'
-  out=$(mktemp)
-  sudo -u "$APP_USER" -H signal-cli --config "$SIGNAL_CLI_CONFIG" link -n SigSummerRise \
-    | tee "$out" &
-  link_pid=$!
-  for _ in $(seq 1 60); do
-    uri=$(grep -oE 'sgnl://[^[:space:]]+' "$out" 2>/dev/null | head -1)
-    [[ -n "$uri" ]] && break
-    if ! kill -0 "$link_pid" 2>/dev/null; then
-      break
-    fi
-    sleep 1
-  done
-  if [[ -z "$uri" ]]; then
-    wait "$link_pid" 2>/dev/null || true
-    cat "$out" >&2
-    rm -f "$out"
-    die "could not find sgnl:// link URI (is signal-cli link still running?)"
-  fi
-  printf 'Device link URI:\n%s\n\n' "$uri"
+render_link_qr() {
+  local uri=$1 png
   png="/tmp/sigsummerrise-signal-link.png"
   if ! printf '%s' "$uri" | qrencode -o "$png" -s 6 -m 2; then
-    kill "$link_pid" 2>/dev/null || true
-    wait "$link_pid" 2>/dev/null || true
-    rm -f "$out"
     die "qrencode failed to write ${png}"
   fi
   chmod 0644 "$png"
@@ -306,16 +282,49 @@ run_signal_link() {
     && ! printf '%s' "$uri" | qrencode -t ANSIUTF8 2>/dev/null; then
     printf 'Terminal QR did not render; use the PNG at %s\n' "$png"
   fi
-  printf '\nWaiting for you to scan the QR on the phone...\n'
-  if ! wait "$link_pid"; then
+}
+
+run_signal_link() {
+  local out uri line qr_shown=0 link_status
+  log "linking signal-cli as a dedicated bot device"
+  printf '\nScan the QR on the bot phone: Settings → Linked devices → Link device.\n\n'
+  if signal_cli_linked; then
+    log "account data already exists in ${SIGNAL_CLI_CONFIG}; current accounts:"
+    sudo -u "$APP_USER" -H signal-cli --config "$SIGNAL_CLI_CONFIG" listAccounts 2>&1 || true
+    die "already linked or stale data present — to re-link: sudo rm -rf ${SIGNAL_CLI_CONFIG}/*"
+  fi
+  out=$(mktemp)
+  set +e
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    printf '%s\n' "$line" >> "$out"
+    if [[ "$qr_shown" -eq 0 ]]; then
+      uri=$(grep -oE 'sgnl://[^[:space:]]+' <<< "$line" | head -1)
+      if [[ -n "$uri" ]]; then
+        qr_shown=1
+        render_link_qr "$uri"
+        printf '\nWaiting for scan on the phone (leave this running)...\n\n'
+      fi
+    fi
+  done < <(sudo -u "$APP_USER" -H signal-cli --config "$SIGNAL_CLI_CONFIG" link -n SigSummerRise 2>&1)
+  link_status=$?
+  set -e
+  if [[ "$link_status" -ne 0 ]]; then
     cat "$out" >&2
     rm -f "$out"
-    die "signal-cli link failed or timed out — scan the QR while the link command is waiting"
+    die "signal-cli link failed (exit ${link_status})"
   fi
-  rm -f "$out"
+  if [[ "$qr_shown" -eq 0 ]]; then
+    cat "$out" >&2
+    rm -f "$out"
+    die "signal-cli finished without printing an sgnl:// link URI"
+  fi
   if ! signal_cli_linked; then
+    cat "$out" >&2
+    rm -f "$out"
     die "signal-cli link finished but no account data was written"
   fi
+  rm -f "$out"
   log "signal-cli link completed"
   printf '\n'
 }
