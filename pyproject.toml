@@ -1,0 +1,38 @@
+[project]
+name = "sigsummerrise"
+version = "0.1.0"
+description = "Signal group summarizer with OpenRouter ZDR and a magic-link dashboard"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "httpx>=0.27.0",
+    "sqlcipher3-binary>=0.5.4",
+    "pydantic-settings>=2.6.0",
+    "jinja2>=3.1.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+sigsummerrise = "sigsummerrise.main:main"
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sigsummerrise = ["templates/*.html"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"

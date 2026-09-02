@@ -1,0 +1,321 @@
+import uuid
+from contextlib import asynccontextmanager
+
+import pytest
+
+from sigsummerrise.bot import Bot
+from sigsummerrise.commands import help_text
+from sigsummerrise.responses import get_responses
+from sigsummerrise.signal_rpc import IncomingMessage
+
+
+class FakeSignal:
+    def __init__(self) -> None:
+        self.dms: list[tuple[str, str]] = []
+        self.groups: list[tuple[str, str]] = []
+        self.typing: list[tuple[str | None, bool]] = []
+        self.ts = 5000
+
+    async def send_dm(self, recipient_aci: str, message: str) -> int | None:
+        self.dms.append((recipient_aci, message))
+        return None
+
+    async def send_group(self, group_id: str, message: str) -> int | None:
+        self.groups.append((group_id, message))
+        self.ts += 1
+        return self.ts
+
+    async def send_typing(
+        self,
+        *,
+        group_id: str | None = None,
+        recipient: str | None = None,
+        stop: bool = False,
+    ) -> None:
+        self.typing.append((group_id or recipient, stop))
+
+    def keep_typing(self, *, group_id: str | None = None, recipient: str | None = None):
+        @asynccontextmanager
+        async def _ctx():
+            await self.send_typing(group_id=group_id, recipient=recipient, stop=False)
+            try:
+                yield
+            finally:
+                await self.send_typing(group_id=group_id, recipient=recipient, stop=True)
+
+        return _ctx()
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _msg(**kwargs) -> IncomingMessage:
+    base = dict(
+        sender_aci="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        display_name="Suisei",
+        timestamp=100,
+        text="hello",
+        group_id="abc123",
+        expires_in_seconds=0,
+        mentioned_uuids=[],
+        quote_timestamp=None,
+        is_reaction=False,
+        has_attachments=False,
+    )
+    base.update(kwargs)
+    return IncomingMessage(**base)
+
+
+@pytest.mark.asyncio
+async def test_disappearing_not_collected(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    await bot.handle(_msg(text="gone soon", expires_in_seconds=60))
+    count = tmp_db.connect().execute("SELECT COUNT(*) AS n FROM messages").fetchone()["n"]
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_non_consent_is_anonymous_hole(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    await bot.handle(_msg(text="private chatter"))
+    row = tmp_db.connect().execute("SELECT sender_aci, body, is_hole FROM messages").fetchone()
+    assert row["is_hole"] == 1
+    assert row["sender_aci"] is None
+    assert row["body"] is None
+    assert tmp_db.count_bodies(aci) == 0
+
+
+@pytest.mark.asyncio
+async def test_mention_sends_consent_dm_not_group_command(tmp_db, settings, monkeypatch):
+    monkeypatch.setattr("sigsummerrise.consent.should_roast_unopted_mention", lambda: False)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    await bot.handle(
+        _msg(
+            text="@grok summarize the past 5 messages",
+            mentioned_uuids=[settings.signal_bot_aci],
+        )
+    )
+    assert signal.groups == []
+    assert len(signal.dms) == 1
+    assert signal.dms[0][1] == get_responses().consent_dm
+    assert "http" not in signal.dms[0][1]
+
+
+@pytest.mark.asyncio
+async def test_unopted_mention_sometimes_roasts_in_group(tmp_db, settings, monkeypatch):
+    monkeypatch.setattr("sigsummerrise.consent.should_roast_unopted_mention", lambda: True)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    await bot.handle(
+        _msg(
+            text="@grok status",
+            mentioned_uuids=[settings.signal_bot_aci],
+        )
+    )
+    assert signal.groups[0][0] == "abc123"
+    assert signal.groups[0][1] in get_responses().group_roasts
+    assert signal.dms[0][1] == get_responses().consent_dm
+
+
+@pytest.mark.asyncio
+async def test_opted_in_collects_body_and_status(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(_msg(text="hello friends"))
+    assert tmp_db.count_bodies(aci) == 1
+    await bot.handle(
+        _msg(
+            text="@grok status",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=101,
+        )
+    )
+    assert tmp_db.count_bodies(aci) == 2
+    assert any("2 of your messages" in text for _, text in signal.groups)
+
+
+@pytest.mark.asyncio
+async def test_dashboard_is_dm_only(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(
+        _msg(text="@grok dashboard", mentioned_uuids=[settings.signal_bot_aci])
+    )
+    assert any("/a/" in text for _, text in signal.dms)
+    assert any("one-time" in text.lower() for _, text in signal.groups)
+    assert not any("/a/" in text for _, text in signal.groups)
+
+
+@pytest.mark.asyncio
+async def test_dm_yes_opts_in(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = str(uuid.uuid4())
+    await bot.handle(_msg(sender_aci=aci, text="Yes", group_id=None))
+    user = tmp_db.get_user(aci)
+    assert user is not None and user.opted_in
+
+
+@pytest.mark.asyncio
+async def test_dm_non_yes_no_asks_again(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    await bot.handle(
+        _msg(
+            text="@grok status",
+            mentioned_uuids=[settings.signal_bot_aci],
+        )
+    )
+    assert signal.dms[-1][1] == get_responses().consent_dm
+    await bot.handle(_msg(sender_aci=aci, text="Yeah no bro", group_id=None))
+    assert signal.dms[-1][1] == get_responses().consent_clarify
+    await bot.handle(_msg(sender_aci=aci, text="I don't know", group_id=None))
+    assert signal.dms[-1][1] == get_responses().consent_clarify
+    user = tmp_db.get_user(aci)
+    assert user is not None and not user.opted_in
+
+
+@pytest.mark.asyncio
+async def test_dm_no_after_opt_in_deletes(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 1, "keep me? no")
+    await bot.handle(_msg(sender_aci=aci, text="No", group_id=None))
+    user = tmp_db.get_user(aci)
+    assert user is not None and not user.opted_in
+    assert tmp_db.count_bodies(aci) == 0
+    assert any("deleted" in text.lower() for _, text in signal.dms)
+
+
+@pytest.mark.asyncio
+async def test_text_mention_without_signal_mention_is_ignored(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    await bot.handle(_msg(text="@grok status", mentioned_uuids=[]))
+    assert signal.groups == []
+    assert signal.dms == []
+
+
+@pytest.mark.asyncio
+async def test_other_group_is_ignored(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(
+        _msg(
+            text="@grok status",
+            mentioned_uuids=[settings.signal_bot_aci],
+            group_id="some-other-group",
+        )
+    )
+    assert signal.groups == []
+    assert tmp_db.count_bodies(aci) == 0
+
+
+@pytest.mark.asyncio
+async def test_empty_group_id_ignores_groups(tmp_db, settings):
+    settings.signal_group_id = ""
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(
+        _msg(text="@grok status", mentioned_uuids=[settings.signal_bot_aci])
+    )
+    assert signal.groups == []
+    assert tmp_db.count_bodies(aci) == 0
+
+
+@pytest.mark.asyncio
+async def test_llm_rate_limit(tmp_db, settings):
+    settings.llm_calls_per_hour = 1
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 10, "hello")
+    mention = dict(
+        mentioned_uuids=[settings.signal_bot_aci],
+        text="@grok summarize the past 5 messages",
+    )
+    await bot.handle(_msg(**mention, timestamp=200))
+    first = list(signal.groups)
+    await bot.handle(_msg(**mention, timestamp=201))
+    extra = signal.groups[len(first) :]
+    assert extra
+    assert any("too many" in text.lower() for _, text in extra)
+
+
+@pytest.mark.asyncio
+async def test_summarize_types_while_waiting(tmp_db, settings, monkeypatch):
+    async def fake_complete(settings, system, user):
+        return "short recap"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 10, "hello")
+    await bot.handle(
+        _msg(
+            text="@grok summarize the past 5 messages",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=200,
+        )
+    )
+    assert signal.typing == [("abc123", False), ("abc123", True)]
+    assert signal.groups[-1][1] == "short recap"
+
+
+@pytest.mark.asyncio
+async def test_help_works_when_opted_out(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.decline(aci)
+    await bot.handle(_msg(sender_aci=aci, text="help", group_id=None))
+    assert signal.dms[-1][1] == help_text()
+    await bot.handle(
+        _msg(text="@grok help", mentioned_uuids=[settings.signal_bot_aci], timestamp=200)
+    )
+    assert any(text == help_text() for _, text in signal.groups)
+
+
+@pytest.mark.asyncio
+async def test_unknown_mention_is_not_help(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(
+        _msg(
+            text="@grok hello there",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=300,
+        )
+    )
+    assert signal.groups
+    assert signal.groups[-1][1] in get_responses().unknown_replies
+    assert signal.groups[-1][1] != help_text()

@@ -1,0 +1,25 @@
+[Unit]
+Description=SigSummerRise Signal group summarizer
+After=network-online.target signal-cli.service
+Wants=network-online.target
+Requires=signal-cli.service
+
+[Service]
+Type=simple
+User=sigsummerrise
+Group=sigsummerrise
+WorkingDirectory=/opt/sigsummerrise
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=/etc/sigsummerrise/secrets.env
+ExecStart=/opt/sigsummerrise/.venv/bin/sigsummerrise
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/sigsummerrise
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

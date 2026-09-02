@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SigSummerRise</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 52rem;
+      margin: 2.5rem auto;
+      padding: 0 1.25rem;
+      line-height: 1.45;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #8884; }
+    th { font-weight: 600; }
+    .empty { opacity: 0.75; }
+  </style>
+</head>
+<body>
+  <h1>SigSummerRise</h1>
+  <p>Message counts for opted-in members. Message text is not shown here.</p>
+  {% if rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Name</th>
+        <th>Status</th>
+        <th>Messages</th>
+        <th>Opted in</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.display_name }}</td>
+        <td>{{ row.consent_state }}</td>
+        <td>{{ row.body_count }}</td>
+        <td>{{ row.opted_in_at }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">No opted-in members yet.</p>
+  {% endif %}
+</body>
+</html>

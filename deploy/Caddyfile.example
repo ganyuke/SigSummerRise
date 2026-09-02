@@ -1,0 +1,25 @@
+# Replace sigsummerrise.example.com with your hostname.
+# App must listen on 127.0.0.1:8000. Do not enable basic auth.
+
+sigsummerrise.example.com {
+	reverse_proxy 127.0.0.1:8000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/sigsummerrise.log
+		format filter {
+			wrap json
+			fields {
+				request>uri query delete
+				request>uri regexp "^/a/.+" "/a/REDACTED"
+			}
+		}
+	}
+}

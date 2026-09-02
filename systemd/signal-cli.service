@@ -1,0 +1,22 @@
+[Unit]
+Description=signal-cli HTTP JSON-RPC daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sigsummerrise
+Group=sigsummerrise
+EnvironmentFile=/etc/sigsummerrise/secrets.env
+ExecStart=/usr/local/bin/signal-cli --config /var/lib/signal-cli -a ${SIGNAL_ACCOUNT} daemon --http 127.0.0.1:8080 --ignore-attachments --ignore-stories
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/signal-cli
+MemoryDenyWriteExecute=no
+
+[Install]
+WantedBy=multi-user.target
