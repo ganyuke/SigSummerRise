@@ -271,11 +271,35 @@ signal_cli_linked() {
 }
 
 run_signal_link() {
+  local out uri png
   log "linking signal-cli as a dedicated bot device"
-  printf '\nScan the QR code on the bot account phone: Settings → Linked devices → Link device.\n\n'
-  sudo -u "$APP_USER" -H signal-cli --config "$SIGNAL_CLI_CONFIG" link -n SigSummerRise \
-    | tee /dev/stderr \
-    | qrencode -t utf8
+  printf '\nScan the QR on the bot phone: Settings → Linked devices → Link device.\n\n'
+  out=$(mktemp)
+  if ! sudo -u "$APP_USER" -H signal-cli --config "$SIGNAL_CLI_CONFIG" link -n SigSummerRise >"$out" 2>&1; then
+    cat "$out" >&2
+    rm -f "$out"
+    die "signal-cli link failed"
+  fi
+  uri=$(grep -oE 'sgnl://[^[:space:]]+' "$out" | head -1)
+  if [[ -z "$uri" ]]; then
+    cat "$out" >&2
+    rm -f "$out"
+    die "could not find sgnl:// link URI in signal-cli output"
+  fi
+  rm -f "$out"
+  printf 'Device link URI:\n%s\n\n' "$uri"
+  png="/tmp/sigsummerrise-signal-link.png"
+  if ! printf '%s' "$uri" | qrencode -o "$png" -s 6 -m 2; then
+    die "qrencode failed to write ${png}"
+  fi
+  chmod 0644 "$png"
+  log "QR code saved to ${png} (scp or open this file to scan)"
+  if printf '%s' "$uri" | qrencode -t UTF8 2>/dev/null \
+    || printf '%s' "$uri" | qrencode -t ANSIUTF8 2>/dev/null; then
+    :
+  else
+    printf 'Terminal QR did not render; use the PNG at %s\n' "$png"
+  fi
   printf '\n'
 }
 
