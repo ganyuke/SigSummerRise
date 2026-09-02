@@ -13,6 +13,7 @@ class FakeSignal:
     def __init__(self) -> None:
         self.dms: list[tuple[str, str]] = []
         self.groups: list[tuple[str, str]] = []
+        self.group_quotes: list[tuple[int, str, str | None]] = []
         self.typing: list[tuple[str | None, bool]] = []
         self.ts = 5000
 
@@ -20,8 +21,18 @@ class FakeSignal:
         self.dms.append((recipient_aci, message))
         return None
 
-    async def send_group(self, group_id: str, message: str) -> int | None:
+    async def send_group(
+        self,
+        group_id: str,
+        message: str,
+        *,
+        quote_timestamp: int | None = None,
+        quote_author: str | None = None,
+        quote_message: str | None = None,
+    ) -> int | None:
         self.groups.append((group_id, message))
+        if quote_timestamp is not None and quote_author:
+            self.group_quotes.append((quote_timestamp, quote_author, quote_message))
         self.ts += 1
         return self.ts
 
@@ -89,8 +100,7 @@ async def test_non_consent_is_anonymous_hole(tmp_db, settings):
 
 
 @pytest.mark.asyncio
-async def test_mention_sends_consent_dm_not_group_command(tmp_db, settings, monkeypatch):
-    monkeypatch.setattr("sigsummerrise.consent.should_roast_unopted_mention", lambda: False)
+async def test_mention_sends_consent_dm_and_group_notice(tmp_db, settings):
     signal = FakeSignal()
     bot = Bot(settings, tmp_db, signal)
     await bot.handle(
@@ -99,26 +109,38 @@ async def test_mention_sends_consent_dm_not_group_command(tmp_db, settings, monk
             mentioned_uuids=[settings.signal_bot_aci],
         )
     )
-    assert signal.groups == []
     assert len(signal.dms) == 1
     assert signal.dms[0][1] == get_responses().consent_dm
+    assert signal.groups[0][1] == get_responses().unopted_group_notice
     assert "http" not in signal.dms[0][1]
 
 
 @pytest.mark.asyncio
-async def test_unopted_mention_sometimes_roasts_in_group(tmp_db, settings, monkeypatch):
+async def test_unopted_first_mention_notices_then_may_roast(tmp_db, settings, monkeypatch):
     monkeypatch.setattr("sigsummerrise.consent.should_roast_unopted_mention", lambda: True)
     signal = FakeSignal()
     bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     await bot.handle(
         _msg(
+            sender_aci=aci,
             text="@grok status",
             mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=100,
         )
     )
-    assert signal.groups[0][0] == "abc123"
-    assert signal.groups[0][1] in get_responses().group_roasts
+    assert signal.groups[0][1] == get_responses().unopted_group_notice
     assert signal.dms[0][1] == get_responses().consent_dm
+
+    await bot.handle(
+        _msg(
+            sender_aci=aci,
+            text="@grok status",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=101,
+        )
+    )
+    assert signal.groups[1][1] in get_responses().group_roasts
 
 
 @pytest.mark.asyncio
@@ -261,7 +283,7 @@ async def test_llm_rate_limit(tmp_db, settings):
     await bot.handle(_msg(**mention, timestamp=201))
     extra = signal.groups[len(first) :]
     assert extra
-    assert any("too many" in text.lower() for _, text in extra)
+    assert any(text in get_responses().llm_rate_replies for _, text in extra)
 
 
 @pytest.mark.asyncio
@@ -303,7 +325,101 @@ async def test_help_works_when_opted_out(tmp_db, settings):
 
 
 @pytest.mark.asyncio
-async def test_unknown_mention_is_not_help(tmp_db, settings):
+async def test_follow_up_chains_on_quoted_reply(tmp_db, settings, monkeypatch):
+    async def fake_complete(settings, system, user):
+        return "answer 2"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    summary_id = tmp_db.save_summary("abc123", 5000, [1], "first summary")
+    tmp_db.add_thread(summary_id, aci, "question 1", 5001)
+    tmp_db.add_thread(summary_id, None, "answer 1", 5002)
+    signal.ts = 5100
+
+    await bot.handle(
+        _msg(
+            text="question 2",
+            quote_timestamp=5002,
+            timestamp=5003,
+        )
+    )
+
+    thread = tmp_db.get_thread(summary_id)
+    assert [entry.body for entry in thread] == [
+        "question 1",
+        "answer 1",
+        "question 2",
+        "answer 2",
+    ]
+    assert signal.groups[-1][1] == "answer 2"
+    assert thread[-1].ts == 5101
+    assert signal.group_quotes[-1] == (5003, aci, "question 2")
+
+
+@pytest.mark.asyncio
+async def test_follow_up_still_works_on_original_summary(tmp_db, settings, monkeypatch):
+    async def fake_complete(settings, system, user):
+        return "follow-up answer"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    summary_id = tmp_db.save_summary("abc123", 5000, [1], "first summary")
+
+    await bot.handle(
+        _msg(
+            text="first question",
+            quote_timestamp=5000,
+            timestamp=5001,
+        )
+    )
+
+    assert tmp_db.get_thread(summary_id)[-1].body == "follow-up answer"
+    assert signal.group_quotes[-1][0] == 5001
+    assert signal.group_quotes[-1][1] == aci
+
+
+@pytest.mark.asyncio
+async def test_summarize_quotes_command_message(tmp_db, settings, monkeypatch):
+    async def fake_complete(settings, system, user):
+        return "short recap"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 10, "hello")
+    await bot.handle(
+        _msg(
+            text="@grok summarize the past 5 messages",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=200,
+        )
+    )
+    assert signal.group_quotes[-1] == (
+        200,
+        aci,
+        "@grok summarize the past 5 messages",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mention_triggers_ask(tmp_db, settings, monkeypatch):
+    async def fake_complete(settings, system, user):
+        assert "Question:" in user
+        assert "island" in user.lower()
+        return "definitely musk"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
     signal = FakeSignal()
     bot = Bot(settings, tmp_db, signal)
     aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -311,11 +427,37 @@ async def test_unknown_mention_is_not_help(tmp_db, settings):
     tmp_db.opt_in(aci, 1)
     await bot.handle(
         _msg(
-            text="@grok hello there",
+            text="@grok trump or musk on the island who wins",
             mentioned_uuids=[settings.signal_bot_aci],
             timestamp=300,
         )
     )
     assert signal.groups
-    assert signal.groups[-1][1] in get_responses().unknown_replies
-    assert signal.groups[-1][1] != help_text()
+    assert signal.groups[-1][1] == "definitely musk"
+    assert signal.group_quotes[-1][0] == 300
+
+
+@pytest.mark.asyncio
+async def test_ask_includes_recent_chat_when_available(tmp_db, settings, monkeypatch):
+    captured: list[str] = []
+
+    async def fake_complete(settings, system, user):
+        captured.append(user)
+        return "answer"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 10, "we should do pizza")
+    await bot.handle(
+        _msg(
+            text="@grok what food did we want",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=301,
+        )
+    )
+    assert "Recent chat:" in captured[0]
+    assert "pizza" in captured[0]

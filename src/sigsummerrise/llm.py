@@ -22,6 +22,15 @@ FOLLOWUP_SYSTEM = (
     "Reply with a concise answer only."
 )
 
+ASK_SYSTEM = (
+    "You answer a question for people in a Signal group chat. "
+    "Recent chat lines may be included for context. "
+    "Lines that say [redacted] were not consented for this use; "
+    "do not guess who wrote them or what they said. "
+    "Use the chat only when it helps answer the question. "
+    "Reply with a concise answer only."
+)
+
 
 class LlmError(Exception):
     pass

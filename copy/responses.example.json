@@ -1,10 +1,11 @@
 {
   "group_roast_chance": 0.25,
-  "consent_dm": "This chat is how you opt in.\n\nIf you reply Yes, I store your non-disappearing group messages in an encrypted database on the operator's server, and I send that text to OpenRouter Zero Data Retention providers when someone asks for a summary or follow-up. Summaries are posted in the group, so everyone can read them — including people who never opted in.\n\nI never keep disappearing messages. Mention me later and say opt out to delete your stored messages.\n\nReply Yes or No in this chat. Just that word (Y and N work too).\nIf you say No, you can still DM Yes later if you change your mind.",
+  "consent_dm": "This chat is how you opt in.\n\nIf you reply Yes, I store your non-disappearing group messages in an encrypted database on the operator's server, and I send that text to OpenRouter Zero Data Retention providers when someone asks for a summary, follow-up, or @mentions me with a question. Summaries and answers are posted in the group, so everyone can read them — including people who never opted in.\n\nI never keep disappearing messages. Mention me later and say opt out to delete your stored messages.\n\nReply Yes or No in this chat. Just that word (Y and N work too).\nIf you say No, you can still DM Yes later if you change your mind.",
   "consent_clarify": "I only count Yes or No in this chat — the whole message, like Yes or No.\nYes = opt in. No = don't collect my messages.\nAlready said No? Send Yes anytime to opt in.",
-  "opted_in": "You're opted in.\n\nIn the group, mention me with Signal's mention picker (typing my name is not enough) and say:\n• summarize the past N messages\n• status\n• dashboard — I'll DM a one-time link\n• opt out\n\nQuote-reply one of my summaries to ask a follow-up. No mention needed for that.",
+  "opted_in": "You're opted in.\n\nIn the group, mention me with Signal's mention picker (typing my name is not enough) and say:\n• summarize the past N messages\n• status\n• dashboard — I'll DM a one-time link\n• opt out\n• anything else — I'll try to answer (I use recent chat when it's relevant)\n\nQuote-reply a summary or any message in that thread to ask a follow-up. No mention needed for that.",
   "declined": "Okay — I will not collect your messages.\nChanged your mind later? Open this chat and send Yes. That's it.",
   "opted_out": "You're opted out. I deleted your stored messages.\nWant back in? DM me Yes.",
+  "unopted_group_notice": "You're not opted in — I can't run commands for you in this group. Check your DM with me and reply Yes or No. Until then I'll ignore mentions like this.",
   "group_roasts": [
     "You're not opted in yet. Reply Yes in our DM first.",
     "I need a Yes in the DM before I can respond in the group.",
@@ -15,7 +16,7 @@
     "Opt in via DM (Yes), then try mentioning me again.",
     "Not opted in yet — open our DM and send Yes."
   ],
-  "help_text": "Mention me in the group with Signal's mention picker (not just typing my name) and say:\n• summarize the past N messages\n• status — how many of your messages I have\n• dashboard — I DM a one-time login link (15 minutes, works once)\n• opt out — deletes your stored messages; DM Yes later to come back\n• help — this list\n\nQuote-reply a summary to ask a follow-up. No mention needed for that.\nNot opted in? Open a DM with me and send Yes or No.",
+  "help_text": "Mention me in the group with Signal's mention picker (not just typing my name) and say:\n• summarize the past N messages\n• status — how many of your messages I have\n• dashboard — I DM a one-time login link (15 minutes, works once)\n• opt out — deletes your stored messages; DM Yes later to come back\n• help — this list\n• or ask me anything — I use recent chat when it helps\n\nQuote-reply a summary or any reply in that thread to ask a follow-up. No mention needed for that.\nNot opted in? Open a DM with me and send Yes or No.",
   "unknown_replies": [
     "I didn't recognize that command.",
     "That didn't match any command I know.",
@@ -27,7 +28,16 @@
     "Say help for the command list."
   ],
   "llm_fail": "I couldn't get a model reply that time. Mention me and ask again in a bit.",
-  "llm_rate": "Too many summary requests in the last hour. Try again later.",
+  "llm_rate_replies": [
+    "You're out of turns for the hour. Touch grass.",
+    "Rate limit hit. I'm not your unlimited Grok subscription.",
+    "Too many asks this hour. Come back later.",
+    "You burned your hourly allowance. Skill issue.",
+    "Slow down — even I have limits, and you found yours.",
+    "Nope. You're done for the hour. Try living offline.",
+    "Out of LLM credits for you. The hour resets eventually.",
+    "I'm not answering that. You've used up your turns."
+  ],
   "summarize_in_dm": "Summaries are group-only. Mention me in the group and say: summarize the past N messages.",
   "empty_window": "I don't have any stored messages to summarize yet. That happens if the group uses disappearing messages, or nobody has opted in.",
   "dashboard_rate": "You've asked for too many dashboard links this hour. Try again later.",

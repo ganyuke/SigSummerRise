@@ -42,7 +42,7 @@ One Python process: FastAPI (dashboard) + asyncio task (Signal event loop). Sepa
 ```
 Group/DM  →  signal-cli (JSON-RPC + SSE)  →  sigsummerrise
                                               ├─ SQLCipher
-                                              ├─ OpenRouter (summarize / follow-up only)
+                                              ├─ OpenRouter (summarize / follow-up / ask)
                                               └─ GET /  and  GET /a/{token}
 ```
 
@@ -75,7 +75,7 @@ Group/DM  →  signal-cli (JSON-RPC + SSE)  →  sigsummerrise
 
 Commands are **regex/keywords**, not an LLM, so asking for a dashboard does not upload the command to OpenRouter.
 
-**Not opted in + group Signal mention of the bot:** ignore the command in-group; DM consent (at most once per 24h). Reply **Yes** / **No** in the DM (whole message). After No, they can DM Yes later. Typing `@bot` as plain text, without a Signal mention, is ignored. With a 1-in-4 chance the bot also posts one of the canned group roasts from `copy/responses.json` (see `copy/responses.example.json` in the public repo).
+**Not opted in + group Signal mention of the bot:** ignore the command in-group; DM consent (at most once per 24h). Reply **Yes** / **No** in the DM (whole message). After No, they can DM Yes later. Typed `@bot` as plain text, without a Signal mention, is ignored. The first group mention in 24h always gets a clear “not opted in” notice in the group; later mentions in that window may get a random roast (`group_roast_chance`, default 1-in-4) instead.
 
 Consent DM must mention: encrypted local storage, OpenRouter ZDR, **summaries are visible to the whole group (including opted-out members)**, disappearing messages never kept, opt-out deletes their stored messages.
 
@@ -88,12 +88,12 @@ Consent DM must mention: encrypted local storage, OpenRouter ZDR, **summaries ar
 | dashboard | `dashboard`, `website`, `login`, `magic link`, `my stats` | DM one-time link; group only gets “I DMed you” |
 | status | `status` | Caller’s count + opt-in time only |
 | help | `help` / `commands` / `what can you do` (also a bare Signal mention with no extra text) | List commands; **do not** mint a link. Works even if not opted in. |
-| unknown | anything else after a mention | Random “I have no clue…” line; tell them to say help. Not the command list. |
-| follow-up | quote-reply a stored summary (opted-in, even without mention) | LLM over window + summary + thread |
+| ask | any other @mention text (opted-in) | LLM answer; recent kept chat attached silently (default 50, `ASK_CONTEXT_N`) |
+| follow-up | quote-reply a stored summary or any message in that thread (opted-in, even without mention) | LLM over window + summary + thread |
 
-Priority: opt-out > summarize > dashboard > status > help. Bare typed `@bot` is **not** a mention. A summarize line must not also issue a magic link.
+Priority: opt-out > summarize > dashboard > status > help > ask. Bare typed `@bot` is **not** a mention. A summarize line must not also issue a magic link.
 
-DMs: Yes/No for consent (whole message). **No after opt-in is opt-out** (deletes stored messages). After No, copy tells them they can DM Yes later. `help` in a DM works even if not opted in. A DM that is not Yes/No/help, after the consent text was already sent, gets `CONSENT_CLARIFY` — not silence. Dashboard/opt-out/status allowed if already opted in. Summarize is **group-only**; a DM summarize tells them to mention the bot in the group.
+DMs: Yes/No for consent (whole message). **No after opt-in is opt-out** (deletes stored messages). After No, copy tells them they can DM Yes later. `help` in a DM works even if not opted in. A DM that is not Yes/No/help, after the consent text was already sent, gets `CONSENT_CLARIFY` — not silence. Dashboard/opt-out/status/ask allowed if already opted in. Summarize is **group-only**; a DM summarize tells them to mention the bot in the group.
 
 Commands are only parsed in-group when the message’s `mentions[]` includes the bot ACI (`SIGNAL_BOT_ACI` or `listAccounts`). There is no username/text fallback.
 

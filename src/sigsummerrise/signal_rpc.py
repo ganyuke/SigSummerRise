@@ -58,6 +58,13 @@ def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def quote_preview(text: str, max_len: int = 200) -> str:
+    preview = (text or "").strip().replace("\n", " ")
+    if len(preview) <= max_len:
+        return preview
+    return preview[: max_len - 1] + "…"
+
+
 def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
     params = payload.get("params") if payload.get("method") == "receive" else payload
     params = _as_dict(params)
@@ -179,8 +186,22 @@ class SignalClient:
         result = await self.rpc("send", {"recipient": [recipient_aci], "message": message})
         return _send_timestamp(result)
 
-    async def send_group(self, group_id: str, message: str) -> int | None:
-        result = await self.rpc("send", {"groupId": group_id, "message": message})
+    async def send_group(
+        self,
+        group_id: str,
+        message: str,
+        *,
+        quote_timestamp: int | None = None,
+        quote_author: str | None = None,
+        quote_message: str | None = None,
+    ) -> int | None:
+        params: dict[str, Any] = {"groupId": group_id, "message": message}
+        if quote_timestamp is not None and quote_author:
+            params["quoteTimestamp"] = quote_timestamp
+            params["quoteAuthor"] = quote_author
+            if quote_message:
+                params["quoteMessage"] = quote_message
+        result = await self.rpc("send", params)
         return _send_timestamp(result)
 
     async def send_typing(

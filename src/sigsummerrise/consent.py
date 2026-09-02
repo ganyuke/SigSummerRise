@@ -11,6 +11,12 @@ def should_send_consent_dm(consent_state: str, last_dm_at: int | None, now: int)
     return now - last_dm_at >= CONSENT_COOLDOWN_SECONDS
 
 
+def should_send_unopted_group_notice(last_notice_at: int | None, now: int) -> bool:
+    if last_notice_at is None:
+        return True
+    return now - last_notice_at >= CONSENT_COOLDOWN_SECONDS
+
+
 def should_roast_unopted_mention() -> bool:
     return get_responses().should_roast_unopted_mention()
 

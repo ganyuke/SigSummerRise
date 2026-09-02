@@ -133,7 +133,8 @@ The example Caddyfile redacts `/a/...` paths and query strings in access logs. T
 - First Signal mention of the bot from someone who has not opted in: ignored in the group; they get a consent DM. They reply **Yes** or **No** in that DM. After No they can DM **Yes** anytime. Typed `@bot` without a mention object does nothing.
 - Disappearing messages (`expiresInSeconds` > 0) are never stored.
 - `@bot summarize the past N messages` uses only kept messages (opted-in bodies + anonymous `[redacted]` holes).
-- Quote-reply a summary to ask a follow-up.
+- Any other `@mention` from an opted-in member is treated as a question; the bot attaches recent chat silently and answers in the group.
+- Quote-reply a summary or any message in that thread to ask a follow-up.
 - `@bot dashboard` DMs a one-time link (15 minutes, one GET). Cookie lasts 24 hours.
 - `@bot opt out` deletes that user's stored bodies, sessions, and unused links only.
 

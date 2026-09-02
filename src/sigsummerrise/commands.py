@@ -68,7 +68,7 @@ def parse_commands(text: str, *, max_n: int) -> Intent:
         return Intent("status")
     if HELP_RE.search(t):
         return Intent("help")
-    return Intent("unknown")
+    return Intent("ask")
 
 
 def parse_intent(text: str, *, mentioned: bool, in_dm: bool, max_n: int) -> Intent:

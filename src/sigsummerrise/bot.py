@@ -6,11 +6,11 @@ import time
 from datetime import datetime, timezone
 
 from sigsummerrise import auth, collect, commands, consent, llm
-from sigsummerrise.commands import Intent, help_text, pick_unknown_reply
+from sigsummerrise.commands import Intent, help_text, normalize_command_text
 from sigsummerrise.config import Settings
-from sigsummerrise.db import Database
+from sigsummerrise.db import Database, User
 from sigsummerrise.responses import get_responses, init_responses
-from sigsummerrise.signal_rpc import IncomingMessage, SignalClient, normalize_group_id
+from sigsummerrise.signal_rpc import IncomingMessage, SignalClient, normalize_group_id, quote_preview
 
 log = logging.getLogger("sigsummerrise.bot")
 
@@ -120,7 +120,7 @@ class Bot:
             and (incoming.text or "").strip()
             and not incoming.is_reaction
         ):
-            summary = self.db.get_summary_by_timestamp(incoming.quote_timestamp)
+            summary = self.db.get_summary_for_quote(incoming.quote_timestamp)
             if summary is not None:
                 await self._follow_up(summary, incoming)
                 return
@@ -137,13 +137,22 @@ class Bot:
             await self._maybe_consent_dm(
                 incoming.sender_aci, user.consent_state, user.last_consent_dm_at, now
             )
-            if consent.should_roast_unopted_mention():
-                await self.signal.send_group(
-                    incoming.group_id or self.settings.signal_group_id,
-                    consent.pick_group_roast(),
-                )
+            await self._maybe_unopted_group_reply(incoming, user, now)
             return
         await self._run_intent(intent, incoming, now, in_group=True)
+
+    async def _maybe_unopted_group_reply(
+        self,
+        incoming: IncomingMessage,
+        user: User,
+        now: int,
+    ) -> None:
+        if consent.should_send_unopted_group_notice(user.last_unopted_group_notice_at, now):
+            await self._reply(incoming, self.copy.unopted_group_notice, True)
+            self.db.set_unopted_group_notice_at(incoming.sender_aci, now)
+            return
+        if consent.should_roast_unopted_mention():
+            await self._reply(incoming, consent.pick_group_roast(), True)
 
     async def _maybe_consent_dm(self, aci: str, state: str, last_dm_at: int | None, now: int) -> None:
         if not consent.should_send_consent_dm(state, last_dm_at, now):
@@ -178,7 +187,44 @@ class Bot:
         if intent.name == "help":
             await self._reply(incoming, help_text(), in_group)
             return
-        await self._reply(incoming, pick_unknown_reply(), in_group)
+        if intent.name == "ask":
+            await self._ask(incoming, now)
+            return
+        await self._reply(incoming, help_text(), in_group)
+
+    def _ask_context_n(self) -> int:
+        n = self.settings.ask_context_n
+        if n < 0:
+            return 0
+        return min(n, self.settings.max_n)
+
+    async def _ask(self, incoming: IncomingMessage, now: int) -> None:
+        if not self._allow_llm(incoming.sender_aci, now):
+            await self._reply_rate_limited(incoming, True)
+            return
+        question = normalize_command_text(incoming.text)
+        if not question:
+            await self._reply(incoming, help_text(), bool(incoming.group_id))
+            return
+        context_n = self._ask_context_n()
+        kept = self.db.last_n_kept(context_n) if context_n else []
+        if kept:
+            excerpt = "\n".join(collect.format_window(kept))
+            user_block = f"Recent chat:\n{excerpt}\n\nQuestion:\n{question}"
+        else:
+            user_block = f"Question:\n{question}"
+        group_id = incoming.group_id or self.settings.signal_group_id
+        in_group = bool(incoming.group_id)
+        try:
+            if in_group:
+                async with self.signal.keep_typing(group_id=group_id):
+                    answer = await llm.complete(self.settings, llm.ASK_SYSTEM, user_block)
+            else:
+                answer = await llm.complete(self.settings, llm.ASK_SYSTEM, user_block)
+        except llm.LlmError:
+            await self._reply(incoming, self.copy.llm_fail, in_group)
+            return
+        await self._reply(incoming, answer, in_group)
 
     async def _send_dashboard_link(self, incoming: IncomingMessage, now: int, in_group: bool) -> None:
         url = auth.issue_magic_link(self.db, self.settings, incoming.sender_aci, now)
@@ -190,10 +236,7 @@ class Bot:
             self.copy.dashboard_dm.format(url=url),
         )
         if in_group:
-            await self.signal.send_group(
-                incoming.group_id or self.settings.signal_group_id,
-                self.copy.dashboard_group,
-            )
+            await self._reply(incoming, self.copy.dashboard_group, True)
 
     def _allow_llm(self, aci: str, now: int) -> bool:
         if not auth.can_issue_link(self.db.llm_count(aci, now), self.settings.llm_calls_per_hour):
@@ -204,17 +247,11 @@ class Bot:
     async def _summarize(self, incoming: IncomingMessage, n: int) -> None:
         kept = self.db.last_n_kept(n)
         if not kept:
-            await self.signal.send_group(
-                incoming.group_id or self.settings.signal_group_id,
-                self.copy.empty_window,
-            )
+            await self._reply(incoming, self.copy.empty_window, True)
             return
         now = int(time.time())
         if not self._allow_llm(incoming.sender_aci, now):
-            await self.signal.send_group(
-                incoming.group_id or self.settings.signal_group_id,
-                self.copy.llm_rate,
-            )
+            await self._reply_rate_limited(incoming, True)
             return
         lines = collect.format_window(kept)
         user_block = "\n".join(lines)
@@ -223,12 +260,9 @@ class Bot:
             async with self.signal.keep_typing(group_id=group_id):
                 text = await llm.complete(self.settings, llm.SUMMARIZE_SYSTEM, user_block)
         except llm.LlmError:
-            await self.signal.send_group(group_id, self.copy.llm_fail)
+            await self._reply(incoming, self.copy.llm_fail, True)
             return
-        ts = await self.signal.send_group(
-            incoming.group_id or self.settings.signal_group_id,
-            text,
-        )
+        ts = await self._reply(incoming, text, True)
         if ts is None:
             log.warning("summary sent but signal-cli returned no timestamp; follow-ups will not bind")
             return
@@ -242,10 +276,7 @@ class Bot:
     async def _follow_up(self, summary, incoming: IncomingMessage) -> None:
         now = int(time.time())
         if not self._allow_llm(incoming.sender_aci, now):
-            await self.signal.send_group(
-                incoming.group_id or self.settings.signal_group_id,
-                self.copy.llm_rate,
-            )
+            await self._reply_rate_limited(incoming, True)
             return
         question = incoming.text.strip()
         self.db.add_thread(summary.id, incoming.sender_aci, question, incoming.timestamp)
@@ -265,22 +296,25 @@ class Bot:
             async with self.signal.keep_typing(group_id=group_id):
                 answer = await llm.complete(self.settings, llm.FOLLOWUP_SYSTEM, user_block)
         except llm.LlmError:
-            await self.signal.send_group(group_id, self.copy.llm_fail)
+            await self._reply(incoming, self.copy.llm_fail, True)
             return
-        ts = await self.signal.send_group(
-            incoming.group_id or self.settings.signal_group_id,
-            answer,
-        )
+        ts = await self._reply(incoming, answer, True)
         self.db.add_thread(summary.id, None, answer, ts or int(time.time() * 1000))
 
-    async def _reply(self, incoming: IncomingMessage, text: str, in_group: bool) -> None:
+    async def _reply(self, incoming: IncomingMessage, text: str, in_group: bool) -> int | None:
         if in_group:
-            await self.signal.send_group(
+            return await self.signal.send_group(
                 incoming.group_id or self.settings.signal_group_id,
                 text,
+                quote_timestamp=incoming.timestamp,
+                quote_author=incoming.sender_aci,
+                quote_message=quote_preview(incoming.text),
             )
-        else:
-            await self.signal.send_dm(incoming.sender_aci, text)
+        await self.signal.send_dm(incoming.sender_aci, text)
+        return None
+
+    async def _reply_rate_limited(self, incoming: IncomingMessage, in_group: bool) -> None:
+        await self._reply(incoming, self.copy.pick_llm_rate_reply(), in_group)
 
 
 def _format_ts(ts: int | None) -> str:

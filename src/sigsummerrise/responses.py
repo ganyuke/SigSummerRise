@@ -14,9 +14,9 @@ _REQUIRED_STRINGS = (
     "opted_in",
     "declined",
     "opted_out",
+    "unopted_group_notice",
     "help_text",
     "llm_fail",
-    "llm_rate",
     "summarize_in_dm",
     "empty_window",
     "dashboard_rate",
@@ -24,7 +24,7 @@ _REQUIRED_STRINGS = (
     "dashboard_dm",
     "status_template",
 )
-_REQUIRED_LISTS = ("group_roasts", "unknown_replies")
+_REQUIRED_LISTS = ("group_roasts", "unknown_replies", "llm_rate_replies")
 
 
 @dataclass(frozen=True)
@@ -35,11 +35,12 @@ class Responses:
     opted_in: str
     declined: str
     opted_out: str
+    unopted_group_notice: str
     group_roasts: tuple[str, ...]
     help_text: str
     unknown_replies: tuple[str, ...]
     llm_fail: str
-    llm_rate: str
+    llm_rate_replies: tuple[str, ...]
     summarize_in_dm: str
     empty_window: str
     dashboard_rate: str
@@ -55,6 +56,9 @@ class Responses:
 
     def pick_unknown_reply(self) -> str:
         return random.choice(self.unknown_replies)
+
+    def pick_llm_rate_reply(self) -> str:
+        return random.choice(self.llm_rate_replies)
 
     def should_roast_unopted_mention(self) -> bool:
         return random.random() < self.group_roast_chance
@@ -120,11 +124,12 @@ def load_responses(path: str) -> Responses:
         opted_in=data["opted_in"].strip(),
         declined=data["declined"].strip(),
         opted_out=data["opted_out"].strip(),
+        unopted_group_notice=data["unopted_group_notice"].strip(),
         group_roasts=_require_nonempty_strings(data, "group_roasts"),
         help_text=data["help_text"].strip(),
         unknown_replies=_require_nonempty_strings(data, "unknown_replies"),
         llm_fail=data["llm_fail"].strip(),
-        llm_rate=data["llm_rate"].strip(),
+        llm_rate_replies=_require_nonempty_strings(data, "llm_rate_replies"),
         summarize_in_dm=data["summarize_in_dm"].strip(),
         empty_window=data["empty_window"].strip(),
         dashboard_rate=data["dashboard_rate"].strip(),

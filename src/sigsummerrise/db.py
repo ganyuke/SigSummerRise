@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS users (
     display_name TEXT NOT NULL DEFAULT '',
     consent_state TEXT NOT NULL DEFAULT 'unknown',
     opted_in_at INTEGER,
-    last_consent_dm_at INTEGER
+    last_consent_dm_at INTEGER,
+    last_unopted_group_notice_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS threads (
     ts INTEGER NOT NULL,
     FOREIGN KEY (summary_id) REFERENCES summaries(id)
 );
+CREATE INDEX IF NOT EXISTS idx_threads_ts ON threads(ts);
 
 CREATE TABLE IF NOT EXISTS magic_tokens (
     token_hash TEXT PRIMARY KEY,
@@ -113,6 +115,7 @@ class User:
     consent_state: str
     opted_in_at: int | None
     last_consent_dm_at: int | None
+    last_unopted_group_notice_at: int | None = None
 
     @property
     def opted_in(self) -> bool:
@@ -214,6 +217,17 @@ class Database:
             WHERE is_hole = 1
             """
         )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_threads_ts
+            ON threads(ts)
+            """
+        )
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "last_unopted_group_notice_at" not in cols:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN last_unopted_group_notice_at INTEGER"
+            )
 
     @_serialized
     def close(self) -> None:
@@ -249,11 +263,20 @@ class Database:
             consent_state=row["consent_state"],
             opted_in_at=row["opted_in_at"],
             last_consent_dm_at=row["last_consent_dm_at"],
+            last_unopted_group_notice_at=row["last_unopted_group_notice_at"],
         )
 
     @_serialized
     def set_consent_dm_at(self, aci: str, now: int) -> None:
         self.connect().execute("UPDATE users SET last_consent_dm_at = ? WHERE aci = ?", (now, aci))
+        self.connect().commit()
+
+    @_serialized
+    def set_unopted_group_notice_at(self, aci: str, now: int) -> None:
+        self.connect().execute(
+            "UPDATE users SET last_unopted_group_notice_at = ? WHERE aci = ?",
+            (now, aci),
+        )
         self.connect().commit()
 
     @_serialized
@@ -405,6 +428,19 @@ class Database:
             (summary_id,),
         ).fetchone()
         return _summary_from_row(row)
+
+    @_serialized
+    def get_summary_for_quote(self, quote_timestamp: int) -> Summary | None:
+        found = self.get_summary_by_timestamp(quote_timestamp)
+        if found is not None:
+            return found
+        row = self.connect().execute(
+            "SELECT summary_id FROM threads WHERE ts = ? LIMIT 1",
+            (quote_timestamp,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self.get_summary_by_id(int(row["summary_id"]))
 
     @_serialized
     def add_thread(self, summary_id: int, sender_aci: str | None, body: str, ts: int) -> None:

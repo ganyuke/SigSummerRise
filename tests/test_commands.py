@@ -42,9 +42,9 @@ def test_status():
     assert intent.name == "status"
 
 
-def test_unknown_is_unknown():
+def test_ask_intent():
     intent = parse_intent("@grok hello there", mentioned=True, in_dm=False, max_n=200)
-    assert intent.name == "unknown"
+    assert intent.name == "ask"
 
 
 def test_help_keyword():

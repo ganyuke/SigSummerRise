@@ -2,7 +2,13 @@ import asyncio
 
 import pytest
 
-from sigsummerrise.signal_rpc import SignalClient, extract_aci_from_accounts, parse_receive, _send_timestamp
+from sigsummerrise.signal_rpc import (
+    SignalClient,
+    extract_aci_from_accounts,
+    parse_receive,
+    quote_preview,
+    _send_timestamp,
+)
 
 
 SAMPLE = {
@@ -94,6 +100,35 @@ def test_send_timestamp_nested_shapes():
     assert _send_timestamp(12345) == 12345
     assert _send_timestamp(None) is None
     assert _send_timestamp({}) is None
+
+
+def test_quote_preview_truncates():
+    assert quote_preview("hello") == "hello"
+    assert quote_preview("x" * 250).endswith("…")
+    assert len(quote_preview("x" * 250)) == 200
+
+
+@pytest.mark.asyncio
+async def test_send_group_includes_quote_params(monkeypatch):
+    client = SignalClient("http://127.0.0.1:9", "+15555550100")
+    captured: list[dict] = []
+
+    async def fake_rpc(method, params=None):
+        captured.append({"method": method, "params": params or {}})
+        return {"timestamp": 999}
+
+    client.rpc = fake_rpc  # type: ignore[method-assign]
+    ts = await client.send_group(
+        "abc123",
+        "reply text",
+        quote_timestamp=42,
+        quote_author="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        quote_message="original",
+    )
+    assert ts == 999
+    assert captured[0]["params"]["quoteTimestamp"] == 42
+    assert captured[0]["params"]["quoteAuthor"] == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    assert captured[0]["params"]["quoteMessage"] == "original"
 
 
 @pytest.mark.asyncio

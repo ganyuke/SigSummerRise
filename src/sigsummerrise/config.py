@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = "deepseek/deepseek-v4-flash-0731"
     max_n: int = 200
+    ask_context_n: int = 50
     db_path: str = "data/sigsummerrise.db"
     db_key: str = ""
     bind_host: str = "127.0.0.1"
