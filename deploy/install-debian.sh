@@ -126,7 +126,6 @@ install_signal_cli() {
   url="https://github.com/AsamK/signal-cli/releases/download/v${version}/${asset}"
   log "installing signal-cli v${version} (${asset})"
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' RETURN
   if ! curl -fsSL "$url" -o "${tmp}/signal-cli.tar.gz"; then
     log "native tarball missing; falling back to JVM build"
     asset="signal-cli-${version}.tar.gz"
@@ -152,6 +151,7 @@ install_signal_cli() {
   [[ -x "${SIGNAL_CLI_OPT}/bin/signal-cli" ]] \
     || die "signal-cli binary not found under ${SIGNAL_CLI_OPT}/bin"
   ln -sf "${SIGNAL_CLI_OPT}/bin/signal-cli" /usr/local/bin/signal-cli
+  rm -rf "$tmp"
 }
 
 ensure_user_and_dirs() {
@@ -271,35 +271,52 @@ signal_cli_linked() {
 }
 
 run_signal_link() {
-  local out uri png
+  local out uri png link_pid
   log "linking signal-cli as a dedicated bot device"
   printf '\nScan the QR on the bot phone: Settings → Linked devices → Link device.\n\n'
   out=$(mktemp)
-  if ! sudo -u "$APP_USER" -H signal-cli --config "$SIGNAL_CLI_CONFIG" link -n SigSummerRise >"$out" 2>&1; then
-    cat "$out" >&2
-    rm -f "$out"
-    die "signal-cli link failed"
-  fi
-  uri=$(grep -oE 'sgnl://[^[:space:]]+' "$out" | head -1)
+  sudo -u "$APP_USER" -H signal-cli --config "$SIGNAL_CLI_CONFIG" link -n SigSummerRise \
+    | tee "$out" &
+  link_pid=$!
+  for _ in $(seq 1 60); do
+    uri=$(grep -oE 'sgnl://[^[:space:]]+' "$out" 2>/dev/null | head -1)
+    [[ -n "$uri" ]] && break
+    if ! kill -0 "$link_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
   if [[ -z "$uri" ]]; then
+    wait "$link_pid" 2>/dev/null || true
     cat "$out" >&2
     rm -f "$out"
-    die "could not find sgnl:// link URI in signal-cli output"
+    die "could not find sgnl:// link URI (is signal-cli link still running?)"
   fi
-  rm -f "$out"
   printf 'Device link URI:\n%s\n\n' "$uri"
   png="/tmp/sigsummerrise-signal-link.png"
   if ! printf '%s' "$uri" | qrencode -o "$png" -s 6 -m 2; then
+    kill "$link_pid" 2>/dev/null || true
+    wait "$link_pid" 2>/dev/null || true
+    rm -f "$out"
     die "qrencode failed to write ${png}"
   fi
   chmod 0644 "$png"
   log "QR code saved to ${png} (scp or open this file to scan)"
-  if printf '%s' "$uri" | qrencode -t UTF8 2>/dev/null \
-    || printf '%s' "$uri" | qrencode -t ANSIUTF8 2>/dev/null; then
-    :
-  else
+  if ! printf '%s' "$uri" | qrencode -t UTF8 2>/dev/null \
+    && ! printf '%s' "$uri" | qrencode -t ANSIUTF8 2>/dev/null; then
     printf 'Terminal QR did not render; use the PNG at %s\n' "$png"
   fi
+  printf '\nWaiting for you to scan the QR on the phone...\n'
+  if ! wait "$link_pid"; then
+    cat "$out" >&2
+    rm -f "$out"
+    die "signal-cli link failed or timed out — scan the QR while the link command is waiting"
+  fi
+  rm -f "$out"
+  if ! signal_cli_linked; then
+    die "signal-cli link finished but no account data was written"
+  fi
+  log "signal-cli link completed"
   printf '\n'
 }
 
