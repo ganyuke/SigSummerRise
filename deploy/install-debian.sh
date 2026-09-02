@@ -120,7 +120,7 @@ signal_cli_native_asset() {
 }
 
 install_signal_cli() {
-  local version asset url tmp
+  local version asset url tmp extract nested_bin nested_root flat_bin
   version=${SIGNAL_CLI_VERSION:-$(latest_signal_cli_version)}
   asset=$(signal_cli_native_asset "$version")
   url="https://github.com/AsamK/signal-cli/releases/download/v${version}/${asset}"
@@ -134,17 +134,20 @@ install_signal_cli() {
     curl -fsSL "$url" -o "${tmp}/signal-cli.tar.gz"
     apt-get install -y --no-install-recommends openjdk-21-jre-headless
   fi
+  extract="${tmp}/extract"
+  mkdir -p "$extract"
+  tar -xzf "${tmp}/signal-cli.tar.gz" -C "$extract"
   rm -rf "$SIGNAL_CLI_OPT"
-  tar -xzf "${tmp}/signal-cli.tar.gz" -C /opt
-  if [[ -d "/opt/signal-cli-${version}" ]]; then
-    mv "/opt/signal-cli-${version}" "$SIGNAL_CLI_OPT"
-  elif [[ ! -d "$SIGNAL_CLI_OPT" ]]; then
-  # Some archives unpack to signal-cli/ directly.
-    for candidate in /opt/signal-cli*; do
-      [[ -d "$candidate" ]] || continue
-      mv "$candidate" "$SIGNAL_CLI_OPT"
-      break
-    done
+  rm -f "$SIGNAL_CLI_OPT"
+  nested_bin=$(find "$extract" -path '*/bin/signal-cli' -type f | head -1)
+  if [[ -n "$nested_bin" ]]; then
+    nested_root=$(dirname "$(dirname "$nested_bin")")
+    mv "$nested_root" "$SIGNAL_CLI_OPT"
+  else
+    flat_bin=$(find "$extract" -name signal-cli -type f | head -1)
+    [[ -n "$flat_bin" ]] || die "signal-cli binary not found in ${asset}"
+    install -d -m 0755 "${SIGNAL_CLI_OPT}/bin"
+    install -m 0755 "$flat_bin" "${SIGNAL_CLI_OPT}/bin/signal-cli"
   fi
   [[ -x "${SIGNAL_CLI_OPT}/bin/signal-cli" ]] \
     || die "signal-cli binary not found under ${SIGNAL_CLI_OPT}/bin"
