@@ -264,18 +264,18 @@ class Bot:
         if not question:
             await self._reply(incoming, help_text(), bool(incoming.group_id))
             return
-        context_n = self._ask_context_n()
+        in_group = bool(incoming.group_id)
+        context_n = self._ask_context_n() if in_group else 0
         kept = self.db.last_n_kept(context_n) if context_n else []
         ctx = self._llm_ctx()
         user_block = collect.format_ask_user_block(
             question=question,
             messages=kept,
             asker_name=self._asker_name(incoming),
-            in_group=bool(incoming.group_id),
+            in_group=in_group,
             ctx=ctx,
         )
         group_id = incoming.group_id or self.settings.signal_group_id
-        in_group = bool(incoming.group_id)
         prompts = self._prompts()
         try:
             async with self._activity(incoming, "ask"):

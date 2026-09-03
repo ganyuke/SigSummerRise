@@ -119,6 +119,19 @@ def test_format_ask_user_block_includes_asker_and_channel():
     assert "Question:\nwhy though" in block
 
 
+def test_format_ask_user_block_dm_omits_transcript():
+    block = format_ask_user_block(
+        question="personal question",
+        messages=[],
+        asker_name="Suisei",
+        in_group=False,
+        ctx=LlmFormatContext(bot_name="grok"),
+    )
+    assert "Channel: private DM" in block
+    assert "Recent chat" not in block
+    assert "Question:\npersonal question" in block
+
+
 def test_format_followup_user_block_uses_bot_name():
     block = format_followup_user_block(
         summary_text="they wanted pizza",

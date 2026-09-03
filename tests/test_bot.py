@@ -468,6 +468,29 @@ async def test_ask_includes_recent_chat_when_available(tmp_db, settings, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_dm_ask_omits_group_context(tmp_db, settings, monkeypatch):
+    captured: list[str] = []
+
+    async def fake_complete(settings, db, system, user, issuance_id=None):
+        captured.append(user)
+        return "dm answer"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 10, "secret group pizza talk")
+    await bot.handle(_msg(sender_aci=aci, text="what did we want for food", group_id=None))
+    assert captured
+    assert "Channel: private DM" in captured[0]
+    assert "Recent chat" not in captured[0]
+    assert "pizza" not in captured[0]
+    assert signal.dms[-1][1] == "dm answer"
+
+
+@pytest.mark.asyncio
 async def test_ask_quote_reply_without_mention(tmp_db, settings, monkeypatch):
     calls: list[str] = []
     fixed_now = 1_700_000_000

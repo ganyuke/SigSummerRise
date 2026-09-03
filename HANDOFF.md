@@ -89,12 +89,12 @@ Consent DM must mention: encrypted local storage, OpenRouter ZDR, **summaries ar
 | dashboard | `dashboard`, `website`, `login`, `magic link`, `my stats` | DM one-time link; group only gets “I DMed you” |
 | status | `status` | Caller’s count + opt-in time only |
 | help | `help` / `commands` / `what can you do` (also a bare Signal mention with no extra text) | List commands; **do not** mint a link. Works even if not opted in. |
-| ask | any other @mention text (opted-in) | LLM answer; recent kept chat attached silently (default 50, `ASK_CONTEXT_N`) |
+| ask | any other @mention text (opted-in) | LLM answer; recent kept **group** chat attached in-group only (`ASK_CONTEXT_N`, default 50). DM asks get the question only — no group transcript. |
 | follow-up | quote-reply a stored summary or any message in that thread (opted-in, even without mention) | LLM over window + summary + thread |
 
 Priority: opt-out > summarize > dashboard > status > help > ask. Bare typed `@bot` is **not** a mention. A summarize line must not also issue a magic link.
 
-DMs: Yes/No for consent (whole message). **No after opt-in is opt-out** (deletes stored messages). After No, copy tells them they can DM Yes later. `help` in a DM works even if not opted in. A DM that is not Yes/No/help, after the consent text was already sent, gets `CONSENT_CLARIFY` — not silence. Dashboard/opt-out/status/ask allowed if already opted in. Summarize is **group-only**; a DM summarize tells them to mention the bot in the group.
+DMs: Yes/No for consent (whole message). **No after opt-in is opt-out** (deletes stored messages). After No, copy tells them they can DM Yes later. `help` in a DM works even if not opted in. A DM that is not Yes/No/help, after the consent text was already sent, gets `CONSENT_CLARIFY` — not silence. Dashboard/opt-out/status/ask allowed if already opted in; DM asks do not include group chat context. Summarize is **group-only**; a DM summarize tells them to mention the bot in the group.
 
 Commands are only parsed in-group when the message’s `mentions[]` includes the bot ACI (`SIGNAL_BOT_ACI` or `listAccounts`). There is no username/text fallback.
 
