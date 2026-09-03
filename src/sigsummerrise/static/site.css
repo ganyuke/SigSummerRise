@@ -82,24 +82,42 @@ header.site-header h1 {
 
 .status-icon {
   flex-shrink: 0;
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 1.25rem;
+  height: 1.25rem;
+  position: relative;
+  display: inline-block;
+  box-sizing: border-box;
 }
 
-.bot-status.status-idle .status-icon::before {
-  content: "✓";
-  display: block;
-  line-height: 1.1rem;
-  text-align: center;
-  font-weight: 700;
-  color: var(--ok);
-}
-
-.bot-status.status-working .status-icon {
-  border: 2px solid var(--border);
-  border-top-color: var(--accent);
+/* Idle: green circle + checkmark */
+.bot-status.status-idle .status-icon {
   border-radius: 50%;
-  animation: bot-spin 0.8s linear infinite;
+  border: 2px solid var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.bot-status.status-idle .status-icon::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  width: 0.3rem;
+  height: 0.55rem;
+  border: solid var(--ok);
+  border-width: 0 2px 2px 0;
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+/* Working: rotating ring spinner */
+.bot-status.status-working .status-icon {
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-top-color: var(--accent);
+  animation: bot-spin 0.7s linear infinite;
+}
+
+.bot-status.status-working .status-icon::after {
+  content: none;
 }
 
 @keyframes bot-spin {
