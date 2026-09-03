@@ -67,7 +67,7 @@ Group/DM  →  signal-cli (JSON-RPC + SSE)  →  sigsummerrise
 3. **Magic links only in DMs.** Posting `/a/{token}` in the group lets anyone burn the one-time token.
 4. **A user can only mutate their own data.** Opt-out/status/dashboard-link issuance are caller-scoped. Summarize **reads** all kept messages but cannot delete others.
 5. **No bodies, tokens, or OpenRouter prompts in journald/stdout.** Caddy must not log `/a/` tokens or query strings (`deploy/Caddyfile.example`). The app disables uvicorn access logs so tokens never hit the unit journal.
-6. **No third-party JS/fonts/CDNs** on the dashboard (would phone home for every viewer).
+6. **No third-party JS/fonts/CDNs** on the dashboard (would phone home for every viewer). Self-hosted `static/dashboard.js` for live polling is OK.
 7. **OpenRouter plugins/tools are off.** They sit outside ZDR.
 8. **Fail closed** if the model has no ZDR endpoint: in-group error **without** echoing the prompt.
 9. **Group commands require a Signal mention of the bot ACI.** Plain-text `@username` is not a mention.
@@ -135,7 +135,7 @@ The cookie value is random, not an ACI.
 
 ## Dashboard
 
-Magic-link members (`/`): consent stats, model name, per-member message counts, LLM usage (24h/7d), estimated spend (7d), weekly rank, not-opted-in table, personal hourly quota, FAQ. **No** per-user last-seen, **no** UUIDs, **no** phones, **no** message bodies. Logged-out visitors see none of the above.
+Magic-link members (`/`): consent stats, model name, per-member message counts, LLM usage (24h/7d), estimated spend (7d), weekly rank, not-opted-in table, personal hourly quota, live bot status, FAQ. Stats and status refresh via self-hosted `GET /api/live` polling (session required); DM activity shows as a private reply to other members (only the recipient sees “reply to you”). **No** per-user last-seen, **no** UUIDs, **no** phones, **no** message bodies. Logged-out visitors see none of the above.
 
 ## Operator UI (`/ops`)
 

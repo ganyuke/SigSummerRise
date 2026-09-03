@@ -76,3 +76,72 @@ def test_logout_clears_session(tmp_path, settings):
     assert "Suisei" in client.get("/").text
     client.post("/logout", follow_redirects=False)
     assert "Suisei" not in client.get("/").text
+
+
+def _login(client, db, settings, aci: str) -> None:
+    from sigsummerrise import auth
+
+    url = auth.issue_magic_link(db, settings, aci, int(time.time()))
+    token = url.rsplit("/", 1)[-1]
+    client.get(f"/a/{token}", follow_redirects=False)
+
+
+def test_api_live_unauthenticated(tmp_path, settings):
+    settings = settings.model_copy(update={"group_name": "μ's", "bot_name": "SecretBot"})
+    client, db = _client(tmp_path, settings)
+    aci = str(uuid.uuid4())
+    db.upsert_user(aci, "Suisei")
+    db.opt_in(aci, int(time.time()))
+    response = client.get("/api/live")
+    assert response.status_code == 401
+    assert "μ's" not in response.text
+    assert "SecretBot" not in response.text
+    assert "Suisei" not in response.text
+
+
+def test_api_live_authenticated(tmp_path, settings):
+    settings = settings.model_copy(update={"bot_name": "TestBot"})
+    client, db = _client(tmp_path, settings)
+    aci = str(uuid.uuid4())
+    db.upsert_user(aci, "Suisei")
+    db.opt_in(aci, int(time.time()))
+    _login(client, db, settings, aci)
+    response = client.get("/api/live")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["bot_name"] == "TestBot"
+    assert data["status"]["state"] == "idle"
+    assert "awaiting messages" in data["status"]["message"]
+    assert "opted_in" in data["stats"]
+    assert data["quota"]["limit"] >= 1
+
+
+def test_api_live_dm_privacy(tmp_path, settings):
+    from sigsummerrise import activity
+
+    settings = settings.model_copy(update={"bot_name": "TestBot"})
+    client, db = _client(tmp_path, settings)
+    alice = str(uuid.uuid4())
+    bob = str(uuid.uuid4())
+    db.upsert_user(alice, "Alice")
+    db.upsert_user(bob, "Bob")
+    db.opt_in(alice, int(time.time()))
+    db.opt_in(bob, int(time.time()))
+    activity.set_working(
+        channel="dm",
+        mode="ask",
+        target_aci=alice,
+        target_display_name="Alice",
+        started_at=int(time.time()) - 10,
+    )
+    _login(client, db, settings, alice)
+    alice_resp = client.get("/api/live").json()
+    assert "reply to you" in alice_resp["status"]["message"]
+    assert "Alice" not in alice_resp["status"]["message"]
+
+    client.post("/logout", follow_redirects=False)
+    _login(client, db, settings, bob)
+    bob_resp = client.get("/api/live").json()
+    assert "private reply" in bob_resp["status"]["message"]
+    assert "Alice" not in bob_resp["status"]["message"]
+

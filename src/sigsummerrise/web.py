@@ -7,11 +7,11 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from sigsummerrise import auth, health, llm
+from sigsummerrise import activity, auth, health, llm
 from sigsummerrise.config import Settings
 from sigsummerrise.db import Database, hash_secret
 from sigsummerrise.runtime import (
@@ -125,6 +125,62 @@ def _parse_optional_int(raw: str) -> int | None:
     return int(text)
 
 
+def _live_status_payload(settings: Settings, db: Database, aci: str, now: int) -> dict[str, Any]:
+    runtime = resolve_llm_config(settings, db)
+    stats = db.dashboard_stats(now, window_n=runtime.max_n)
+    snap = activity.snapshot()
+    message, elapsed = activity.format_status_message(
+        bot_name=settings.bot_name,
+        viewer_aci=aci,
+        snap=snap,
+        now=now,
+    )
+    members_raw = db.member_usage_rows(now)
+    members = []
+    for row in members_raw:
+        rank_cell = "—"
+        if row.rank_7d == 1 and row.llm_calls_7d > 0:
+            rank_cell = f"#{row.rank_7d} this week's hog"
+        elif row.rank_7d:
+            rank_cell = f"#{row.rank_7d}"
+        members.append(
+            {
+                "display_name": row.display_name,
+                "body_count": row.body_count,
+                "llm_calls_24h": row.llm_calls_24h,
+                "llm_calls_7d": row.llm_calls_7d,
+                "cost_display": _fmt_cost(row.cost_usd_7d),
+                "rank_display": rank_cell,
+                "is_you": row.aci == aci,
+            }
+        )
+    return {
+        "bot_name": settings.bot_name,
+        "status": {
+            "state": snap.state,
+            "message": message,
+            "elapsed_seconds": elapsed,
+        },
+        "stats": {
+            "opted_in": stats.opted_in,
+            "not_opted_in": stats.not_opted_in,
+            "body_messages": stats.body_messages,
+            "holes": stats.holes,
+            "redaction_pct_last_n": stats.redaction_pct_last_n,
+            "messages_24h": stats.messages_24h,
+            "messages_7d": stats.messages_7d,
+            "summaries_7d": stats.summaries_7d,
+            "llm_calls_24h": stats.llm_calls_24h,
+            "cost_7d": _fmt_cost(stats.cost_usd_7d),
+        },
+        "quota": {
+            "used": db.llm_count(aci, now),
+            "limit": runtime.llm_calls_per_hour,
+        },
+        "members": members,
+    }
+
+
 def mount_routes(app: FastAPI) -> None:
     jinja = _env()
     app.mount("/static", StaticFiles(directory=str(static_dir())), name="static")
@@ -162,6 +218,8 @@ def mount_routes(app: FastAPI) -> None:
         html = jinja.get_template("index.html").render(
             page_title=f"{_group_label(settings)} — dashboard",
             group_label=_group_label(settings),
+            bot_name=settings.bot_name,
+            status_message=activity.idle_message(settings.bot_name),
             model=runtime.openrouter_model,
             viewer_name=viewer_name,
             stats=stats,
@@ -178,6 +236,17 @@ def mount_routes(app: FastAPI) -> None:
             },
         )
         return HTMLResponse(html)
+
+    @app.get("/api/live")
+    def api_live(request: Request) -> JSONResponse:
+        settings: Settings = request.app.state.settings
+        db: Database = request.app.state.db
+        now = int(time.time())
+        aci = session_aci(request, db, settings, now)
+        if aci is None:
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        payload = _live_status_payload(settings, db, aci, now)
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
     @app.post("/logout")
     def logout(request: Request) -> RedirectResponse:

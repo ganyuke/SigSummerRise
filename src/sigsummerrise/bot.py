@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from typing import AsyncIterator
 
-from sigsummerrise import auth, collect, commands, consent, health, llm
+from sigsummerrise import activity, auth, collect, commands, consent, health, llm
+from sigsummerrise.activity import Mode
 from sigsummerrise.commands import Intent, help_text, normalize_command_text
 from sigsummerrise.config import Settings
 from sigsummerrise.db import Database, User
@@ -222,6 +225,20 @@ class Bot:
     def _asker_name(self, incoming: IncomingMessage) -> str:
         return (incoming.display_name or "").strip() or "Someone"
 
+    @asynccontextmanager
+    async def _activity(self, incoming: IncomingMessage, mode: Mode) -> AsyncIterator[None]:
+        activity.set_working(
+            channel="group" if incoming.group_id else "dm",
+            mode=mode,
+            target_aci=incoming.sender_aci,
+            target_display_name=self._asker_name(incoming),
+            started_at=int(time.time()),
+        )
+        try:
+            yield
+        finally:
+            activity.clear()
+
     def _ask_context_n(self) -> int:
         n = self._runtime().ask_context_n
         if n < 0:
@@ -261,11 +278,16 @@ class Bot:
         in_group = bool(incoming.group_id)
         prompts = self._prompts()
         try:
-            if in_group:
-                async with self.signal.keep_typing(group_id=group_id):
-                    answer = await self._complete_llm(prompts.ask_system, user_block, now, incoming.sender_aci)
-            else:
-                answer = await self._complete_llm(prompts.ask_system, user_block, now, incoming.sender_aci)
+            async with self._activity(incoming, "ask"):
+                if in_group:
+                    async with self.signal.keep_typing(group_id=group_id):
+                        answer = await self._complete_llm(
+                            prompts.ask_system, user_block, now, incoming.sender_aci
+                        )
+                else:
+                    answer = await self._complete_llm(
+                        prompts.ask_system, user_block, now, incoming.sender_aci
+                    )
         except llm.LlmError:
             await self._reply(incoming, self.copy.llm_fail, in_group)
             return
@@ -313,8 +335,11 @@ class Bot:
         group_id = incoming.group_id or self.settings.signal_group_id
         prompts = self._prompts()
         try:
-            async with self.signal.keep_typing(group_id=group_id):
-                text = await self._complete_llm(prompts.summarize_system, user_block, now, incoming.sender_aci)
+            async with self._activity(incoming, "summarize"):
+                async with self.signal.keep_typing(group_id=group_id):
+                    text = await self._complete_llm(
+                        prompts.summarize_system, user_block, now, incoming.sender_aci
+                    )
         except llm.LlmError:
             await self._reply(incoming, self.copy.llm_fail, True)
             return
@@ -349,8 +374,11 @@ class Bot:
         group_id = incoming.group_id or self.settings.signal_group_id
         prompts = self._prompts()
         try:
-            async with self.signal.keep_typing(group_id=group_id):
-                answer = await self._complete_llm(prompts.followup_system, user_block, now, incoming.sender_aci)
+            async with self._activity(incoming, "follow_up"):
+                async with self.signal.keep_typing(group_id=group_id):
+                    answer = await self._complete_llm(
+                        prompts.followup_system, user_block, now, incoming.sender_aci
+                    )
         except llm.LlmError:
             await self._reply(incoming, self.copy.llm_fail, True)
             return

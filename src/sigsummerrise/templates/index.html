@@ -13,24 +13,29 @@
 </nav>
 {% endblock %}
 {% block content %}
+<div id="bot-status" class="bot-status status-idle" aria-live="polite">
+  <span class="status-icon" aria-hidden="true"></span>
+  <span id="bot-status-message">{{ status_message }}</span>
+</div>
+
 <dl class="stats">
-  <div><dt>Opted in</dt><dd>{{ stats.opted_in }}</dd></div>
-  <div><dt>Not opted in</dt><dd>{{ stats.not_opted_in }}</dd></div>
-  <div><dt>Stored messages</dt><dd>{{ stats.body_messages }}</dd></div>
-  <div><dt>Redacted holes</dt><dd>{{ stats.holes }}</dd></div>
-  <div><dt>Last {{ window_n }} redacted</dt><dd>{{ stats.redaction_pct_last_n }}%</dd></div>
-  <div><dt>Messages (24h)</dt><dd>{{ stats.messages_24h }}</dd></div>
-  <div><dt>Messages (7d)</dt><dd>{{ stats.messages_7d }}</dd></div>
-  <div><dt>Summaries (7d)</dt><dd>{{ stats.summaries_7d }}</dd></div>
-  <div><dt>LLM calls (24h)</dt><dd>{{ stats.llm_calls_24h }}</dd></div>
-  <div><dt>Est. spend (7d)</dt><dd>{{ cost_7d }}</dd></div>
+  <div><dt>Opted in</dt><dd data-live="opted_in">{{ stats.opted_in }}</dd></div>
+  <div><dt>Not opted in</dt><dd data-live="not_opted_in">{{ stats.not_opted_in }}</dd></div>
+  <div><dt>Stored messages</dt><dd data-live="body_messages">{{ stats.body_messages }}</dd></div>
+  <div><dt>Redacted holes</dt><dd data-live="holes">{{ stats.holes }}</dd></div>
+  <div><dt>Last {{ window_n }} redacted</dt><dd data-live="redaction_pct_last_n">{{ stats.redaction_pct_last_n }}%</dd></div>
+  <div><dt>Messages (24h)</dt><dd data-live="messages_24h">{{ stats.messages_24h }}</dd></div>
+  <div><dt>Messages (7d)</dt><dd data-live="messages_7d">{{ stats.messages_7d }}</dd></div>
+  <div><dt>Summaries (7d)</dt><dd data-live="summaries_7d">{{ stats.summaries_7d }}</dd></div>
+  <div><dt>LLM calls (24h)</dt><dd data-live="llm_calls_24h">{{ stats.llm_calls_24h }}</dd></div>
+  <div><dt>Est. spend (7d)</dt><dd data-live="cost_7d">{{ cost_7d }}</dd></div>
 </dl>
 
-<p>Your quota this hour: <strong>{{ quota_used }} / {{ quota_limit }}</strong> LLM calls.</p>
+<p>Your quota this hour: <strong><span data-live="quota_used">{{ quota_used }}</span> / <span data-live="quota_limit">{{ quota_limit }}</span></strong> LLM calls.</p>
 
 <h2>Members</h2>
 {% if members %}
-<table class="data">
+<table class="data" id="members-table">
   <thead>
     <tr>
       <th><a href="?sort=name">Name</a></th>
@@ -44,14 +49,14 @@
   </thead>
   <tbody>
     {% for row in members %}
-    <tr class="{% if row.is_you %}you{% endif %}">
+    <tr class="{% if row.is_you %}you{% endif %}" data-member="{{ row.display_name }}">
       <td>{{ row.display_name }}{% if row.is_you %} <span class="muted">(you)</span>{% endif %}</td>
       <td><span class="badge ok">opted in</span></td>
-      <td>{{ row.body_count }}</td>
-      <td>{{ row.llm_calls_24h }}</td>
-      <td>{{ row.llm_calls_7d }}</td>
-      <td>{{ row.cost_display }}</td>
-      <td>
+      <td data-live-member="body_count">{{ row.body_count }}</td>
+      <td data-live-member="llm_calls_24h">{{ row.llm_calls_24h }}</td>
+      <td data-live-member="llm_calls_7d">{{ row.llm_calls_7d }}</td>
+      <td data-live-member="cost_display">{{ row.cost_display }}</td>
+      <td data-live-member="rank_display">
         {% if row.rank_7d == 1 and row.llm_calls_7d > 0 %}
         #{{ row.rank_7d }} <span class="roast">this week's hog</span>
         {% elif row.rank_7d %}
@@ -94,4 +99,5 @@
     <li>Opt out in Signal to delete your stored messages.</li>
   </ul>
 </details>
+<script src="/static/dashboard.js" defer data-bot-name="{{ bot_name }}"></script>
 {% endblock %}
