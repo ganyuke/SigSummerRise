@@ -1,26 +1,8 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SigSummerRise</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body {
-      font-family: system-ui, sans-serif;
-      max-width: 40rem;
-      margin: 3rem auto;
-      padding: 0 1.25rem;
-      line-height: 1.5;
-    }
-    .error { color: #b00020; }
-  </style>
-</head>
-<body>
-  <h1>SigSummerRise</h1>
-  {% if error %}
-  <p class="error">{{ error }}</p>
-  {% endif %}
-  <p>In Signal, mention the bot and say <strong>dashboard</strong>. It DMs a one-time link. That link works once and signs you in for a day.</p>
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}Sign in — SigSummerRise{% endblock %}
+{% block content %}
+{% if error %}
+<p class="flash bad">{{ error }}</p>
+{% endif %}
+<p>Mention the bot in Signal and say <strong>dashboard</strong>. It DMs a one-time link (15 minutes, single use). That signs you in for 24 hours.</p>
+{% endblock %}

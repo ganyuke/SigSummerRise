@@ -11,6 +11,8 @@ from urllib.parse import urljoin
 
 import httpx
 
+from sigsummerrise.signal_format import markdown_to_signal
+
 log = logging.getLogger("sigsummerrise.signal")
 
 # Signal shows typing for 15s unless STOP is sent; refresh before that.
@@ -183,7 +185,11 @@ class SignalClient:
         return extract_aci_from_accounts(result)
 
     async def send_dm(self, recipient_aci: str, message: str) -> int | None:
-        result = await self.rpc("send", {"recipient": [recipient_aci], "message": message})
+        plain, text_styles = markdown_to_signal(message)
+        params: dict[str, Any] = {"recipient": [recipient_aci], "message": plain}
+        if text_styles:
+            params["textStyles"] = text_styles
+        result = await self.rpc("send", params)
         return _send_timestamp(result)
 
     async def send_group(
@@ -195,12 +201,18 @@ class SignalClient:
         quote_author: str | None = None,
         quote_message: str | None = None,
     ) -> int | None:
-        params: dict[str, Any] = {"groupId": group_id, "message": message}
+        plain, text_styles = markdown_to_signal(message)
+        params: dict[str, Any] = {"groupId": group_id, "message": plain}
+        if text_styles:
+            params["textStyles"] = text_styles
         if quote_timestamp is not None and quote_author:
             params["quoteTimestamp"] = quote_timestamp
             params["quoteAuthor"] = quote_author
             if quote_message:
-                params["quoteMessage"] = quote_message
+                quote_plain, quote_styles = markdown_to_signal(quote_message)
+                params["quoteMessage"] = quote_plain
+                if quote_styles:
+                    params["quoteTextStyles"] = quote_styles
         result = await self.rpc("send", params)
         return _send_timestamp(result)
 

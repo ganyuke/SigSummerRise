@@ -11,6 +11,7 @@ from sigsummerrise.bot import Bot
 from sigsummerrise.config import Settings
 from sigsummerrise.db import Database
 from sigsummerrise.responses import init_responses
+from sigsummerrise.prompts import init_prompts
 from sigsummerrise.web import mount_routes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
@@ -73,6 +74,7 @@ def main() -> None:
     settings = Settings()
     require_runtime_settings(settings)
     init_responses(settings.responses_path)
+    init_prompts(settings.prompts_path)
     log.info("starting web server on %s:%s", settings.bind_host, settings.bind_port)
     uvicorn.run(
         create_app(settings=settings, start_bot=True),

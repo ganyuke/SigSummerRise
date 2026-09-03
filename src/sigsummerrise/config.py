@@ -25,7 +25,14 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 86400
     dashboard_links_per_hour: int = 3
     llm_calls_per_hour: int = 10
+    llm_temperature: float | None = None
+    llm_max_tokens: int | None = None
+    operator_token: str = ""
     responses_path: str = "copy/responses.json"
+    prompts_path: str = "copy/prompts.json"
+    bot_name: str = "SigSummerRise"
+    bot_timezone: str = "UTC"
+    group_name: str = ""
 
     @property
     def public_origin(self) -> str:

@@ -1,50 +1,97 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SigSummerRise</title>
-  <style>
-    :root { color-scheme: light dark; }
-    body {
-      font-family: system-ui, sans-serif;
-      max-width: 52rem;
-      margin: 2.5rem auto;
-      padding: 0 1.25rem;
-      line-height: 1.45;
-    }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid #8884; }
-    th { font-weight: 600; }
-    .empty { opacity: 0.75; }
-  </style>
-</head>
-<body>
-  <h1>SigSummerRise</h1>
-  <p>Message counts for opted-in members. Message text is not shown here.</p>
-  {% if rows %}
-  <table>
-    <thead>
-      <tr>
-        <th>Name</th>
-        <th>Status</th>
-        <th>Messages</th>
-        <th>Opted in</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for row in rows %}
-      <tr>
-        <td>{{ row.display_name }}</td>
-        <td>{{ row.consent_state }}</td>
-        <td>{{ row.body_count }}</td>
-        <td>{{ row.opted_in_at }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% else %}
-  <p class="empty">No opted-in members yet.</p>
-  {% endif %}
-</body>
-</html>
+{% extends "base.html" %}
+{% block title %}{{ page_title }}{% endblock %}
+{% block heading %}{{ group_label }}{% endblock %}
+{% block subtitle %}
+<p class="subtitle">Model: <strong>{{ model }}</strong> · OpenRouter, ZDR only</p>
+{% endblock %}
+{% block nav %}
+<nav class="topnav">
+  <span class="muted">Signed in as {{ viewer_name }}</span>
+  <form method="post" action="/logout" style="display:inline;margin-left:1rem">
+    <button type="submit" class="secondary" style="margin-top:0">Log out</button>
+  </form>
+</nav>
+{% endblock %}
+{% block content %}
+<dl class="stats">
+  <div><dt>Opted in</dt><dd>{{ stats.opted_in }}</dd></div>
+  <div><dt>Not opted in</dt><dd>{{ stats.not_opted_in }}</dd></div>
+  <div><dt>Stored messages</dt><dd>{{ stats.body_messages }}</dd></div>
+  <div><dt>Redacted holes</dt><dd>{{ stats.holes }}</dd></div>
+  <div><dt>Last {{ window_n }} redacted</dt><dd>{{ stats.redaction_pct_last_n }}%</dd></div>
+  <div><dt>Messages (24h)</dt><dd>{{ stats.messages_24h }}</dd></div>
+  <div><dt>Messages (7d)</dt><dd>{{ stats.messages_7d }}</dd></div>
+  <div><dt>Summaries (7d)</dt><dd>{{ stats.summaries_7d }}</dd></div>
+  <div><dt>LLM calls (24h)</dt><dd>{{ stats.llm_calls_24h }}</dd></div>
+  <div><dt>Est. spend (7d)</dt><dd>{{ cost_7d }}</dd></div>
+</dl>
+
+<p>Your quota this hour: <strong>{{ quota_used }} / {{ quota_limit }}</strong> LLM calls.</p>
+
+<h2>Members</h2>
+{% if members %}
+<table class="data">
+  <thead>
+    <tr>
+      <th><a href="?sort=name">Name</a></th>
+      <th>Status</th>
+      <th>Messages</th>
+      <th>LLM (24h)</th>
+      <th><a href="?sort=llm7d">LLM (7d)</a></th>
+      <th>Est. $ (7d)</th>
+      <th>Rank (7d)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in members %}
+    <tr class="{% if row.is_you %}you{% endif %}">
+      <td>{{ row.display_name }}{% if row.is_you %} <span class="muted">(you)</span>{% endif %}</td>
+      <td><span class="badge ok">opted in</span></td>
+      <td>{{ row.body_count }}</td>
+      <td>{{ row.llm_calls_24h }}</td>
+      <td>{{ row.llm_calls_7d }}</td>
+      <td>{{ row.cost_display }}</td>
+      <td>
+        {% if row.rank_7d == 1 and row.llm_calls_7d > 0 %}
+        #{{ row.rank_7d }} <span class="roast">this week's hog</span>
+        {% elif row.rank_7d %}
+        #{{ row.rank_7d }}
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty">No opted-in members yet.</p>
+{% endif %}
+
+{% if pending %}
+<h2>Not opted in</h2>
+<table class="data">
+  <thead>
+    <tr><th>Name</th><th>Status</th></tr>
+  </thead>
+  <tbody>
+    {% for row in pending %}
+    <tr>
+      <td>{{ row.display_name }}</td>
+      <td><span class="badge warn">{{ row.consent_state }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<details class="faq">
+  <summary>How this works</summary>
+  <ul>
+    <li>Text only since the bot joined; no images or voice notes.</li>
+    <li>Disappearing messages are never stored.</li>
+    <li>Summaries and @mention answers are visible to the whole group.</li>
+    <li>Summarize uses up to <strong>{{ limits.max_n }}</strong> kept messages; ask uses <strong>{{ limits.ask_context_n }}</strong> lines of context.</li>
+    <li><strong>{{ limits.llm_calls_per_hour }}</strong> LLM calls per person per hour.</li>
+    <li>Opt out in Signal to delete your stored messages.</li>
+  </ul>
+</details>
+{% endblock %}

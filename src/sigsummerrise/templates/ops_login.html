@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Operator sign in{% endblock %}
+{% block heading %}Operator{% endblock %}
+{% block content %}
+{% if error %}
+<p class="flash bad">{{ error }}</p>
+{% endif %}
+<form method="post" action="/ops/login" class="ops-form">
+  <label for="token">Operator token</label>
+  <input type="password" id="token" name="token" autocomplete="current-password" required>
+  <p class="hint">Set <code>OPERATOR_TOKEN</code> in secrets. Not the OpenRouter key.</p>
+  <button type="submit">Sign in</button>
+</form>
+{% endblock %}

@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Operator — SigSummerRise{% endblock %}
+{% block heading %}Operator{% endblock %}
+{% block nav %}
+<nav class="topnav">
+  <a href="/">Member dashboard</a>
+  <form method="post" action="/ops/logout" style="display:inline">
+    <button type="submit" class="secondary" style="margin-top:0">Log out</button>
+  </form>
+</nav>
+{% endblock %}
+{% block flash %}
+{% if flash_ok %}<p class="flash ok">{{ flash_ok }}</p>{% endif %}
+{% if flash_err %}<p class="flash bad">{{ flash_err }}</p>{% endif %}
+{% endblock %}
+{% block content %}
+
+<h2>Health</h2>
+<dl class="stats">
+  <div><dt>Last Signal event</dt><dd>{% if health.last_event_age is not none %}{{ health.last_event_age }}{% else %}never{% endif %}</dd></div>
+  <div><dt>signal-cli</dt><dd><span class="badge {% if health.signal_ok %}ok{% else %}bad{% endif %}">{% if health.signal_ok %}reachable{% else %}unreachable{% endif %}</span></dd></div>
+  <div><dt>API key</dt><dd><span class="badge {% if health.key_ok %}ok{% else %}bad{% endif %}">{% if health.key_ok %}configured{% if health.key_suffix %} …{{ health.key_suffix }}{% endif %}{% else %}missing{% endif %}</span></dd></div>
+  <div><dt>Bot ACI</dt><dd><span class="badge {% if health.bot_aci_ok %}ok{% else %}bad{% endif %}">{% if health.bot_aci_ok %}set{% else %}missing{% endif %}</span></dd></div>
+  <div><dt>Group ID</dt><dd><span class="badge {% if health.group_ok %}ok{% else %}bad{% endif %}">{% if health.group_ok %}set{% else %}missing{% endif %}</span></dd></div>
+</dl>
+
+<h2>Aggregates</h2>
+<dl class="stats">
+  <div><dt>Opted in</dt><dd>{{ agg.opted_in }}</dd></div>
+  <div><dt>Not opted in</dt><dd>{{ agg.not_opted_in }}</dd></div>
+  <div><dt>Messages / holes</dt><dd>{{ agg.body_messages }} / {{ agg.holes }}</dd></div>
+  <div><dt>Summaries</dt><dd>{{ agg.summaries_total }}</dd></div>
+  <div><dt>LLM calls (24h)</dt><dd>{{ agg.llm_calls_24h }}</dd></div>
+</dl>
+
+<form method="post" action="/ops" class="ops-form">
+  <fieldset>
+    <legend>Model &amp; limits</legend>
+    <label for="openrouter_model">Model</label>
+    <input type="text" id="openrouter_model" name="openrouter_model" value="{{ form.openrouter_model }}" required>
+    <label for="llm_temperature">Temperature (blank = default)</label>
+    <input type="text" id="llm_temperature" name="llm_temperature" value="{{ form.llm_temperature }}">
+    <label for="llm_max_tokens">Max tokens (blank = default)</label>
+    <input type="text" id="llm_max_tokens" name="llm_max_tokens" value="{{ form.llm_max_tokens }}">
+    <label for="llm_calls_per_hour">LLM calls per hour</label>
+    <input type="number" id="llm_calls_per_hour" name="llm_calls_per_hour" value="{{ form.llm_calls_per_hour }}" min="1" required>
+    <label for="ask_context_n">Ask context lines</label>
+    <input type="number" id="ask_context_n" name="ask_context_n" value="{{ form.ask_context_n }}" min="0" required>
+    <label for="max_n">Max summarize N</label>
+    <input type="number" id="max_n" name="max_n" value="{{ form.max_n }}" min="1" required>
+    <label for="openrouter_api_key">OpenRouter API key</label>
+    <input type="password" id="openrouter_api_key" name="openrouter_api_key" value="" autocomplete="new-password">
+    <p class="hint">Leave blank to keep the current key. ZDR stays on in code.</p>
+  </fieldset>
+
+  <fieldset>
+    <legend>System prompts</legend>
+    {% if form.prompts_from_db %}<p class="hint">Using database overrides. Reset below to reload from file.</p>{% endif %}
+    <label for="summarize_system">Summarize</label>
+    <textarea id="summarize_system" name="summarize_system" required>{{ form.summarize_system }}</textarea>
+    <label for="followup_system">Follow-up</label>
+    <textarea id="followup_system" name="followup_system" required>{{ form.followup_system }}</textarea>
+    <label for="ask_system">Ask</label>
+    <textarea id="ask_system" name="ask_system" required>{{ form.ask_system }}</textarea>
+    <p class="hint">Placeholders: {bot_name}, {current_time}, {group_name}</p>
+  </fieldset>
+
+  <button type="submit" name="action" value="save">Save</button>
+  <button type="submit" name="action" value="reset_prompts" class="secondary">Reset prompts to file</button>
+</form>
+
+<form method="post" action="/ops/test" class="ops-form">
+  <fieldset>
+    <legend>Test call</legend>
+    <p class="hint">One harmless completion against the saved model and key.</p>
+    <button type="submit">Run test</button>
+    {% if test_result %}
+    <p class="{% if test_ok %}flash ok{% else %}flash bad{% endif %}" style="margin-top:0.75rem">{{ test_result }}</p>
+    {% endif %}
+  </fieldset>
+</form>
+{% endblock %}

@@ -1,54 +1,72 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import httpx
 
 from sigsummerrise.config import Settings
+from sigsummerrise.db import Database
+from sigsummerrise.runtime import ResolvedLlmConfig, resolve_llm_config
 
 log = logging.getLogger("sigsummerrise.llm")
-
-SUMMARIZE_SYSTEM = (
-    "You summarize a Signal group chat for the people in it. "
-    "Lines that say [redacted] were not consented for this use; "
-    "do not guess who wrote them or what they said. "
-    "Reply with a concise summary only."
-)
-
-FOLLOWUP_SYSTEM = (
-    "You answer a follow-up question about a Signal group chat summary. "
-    "Lines that say [redacted] were not consented for this use; "
-    "do not guess who wrote them or what they said. "
-    "Reply with a concise answer only."
-)
-
-ASK_SYSTEM = (
-    "You answer a question for people in a Signal group chat. "
-    "Recent chat lines may be included for context. "
-    "Lines that say [redacted] were not consented for this use; "
-    "do not guess who wrote them or what they said. "
-    "Use the chat only when it helps answer the question. "
-    "Reply with a concise answer only."
-)
 
 
 class LlmError(Exception):
     pass
 
 
-async def complete(settings: Settings, system: str, user: str) -> str:
-    if not settings.openrouter_api_key:
+def _extract_usage(data: dict[str, Any]) -> tuple[int | None, int | None, float | None]:
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None, None, None
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    cost = usage.get("cost")
+    if cost is None:
+        cost = usage.get("total_cost")
+    try:
+        cost_f = float(cost) if cost is not None else None
+    except (TypeError, ValueError):
+        cost_f = None
+    try:
+        prompt_i = int(prompt) if prompt is not None else None
+    except (TypeError, ValueError):
+        prompt_i = None
+    try:
+        completion_i = int(completion) if completion is not None else None
+    except (TypeError, ValueError):
+        completion_i = None
+    return prompt_i, completion_i, cost_f
+
+
+async def complete(
+    settings: Settings,
+    db: Database,
+    system: str,
+    user: str,
+    *,
+    issuance_id: int | None = None,
+    config: ResolvedLlmConfig | None = None,
+) -> str:
+    cfg = config or resolve_llm_config(settings, db)
+    if not cfg.openrouter_api_key:
         raise LlmError("not configured")
-    payload = {
-        "model": settings.openrouter_model,
+    payload: dict[str, Any] = {
+        "model": cfg.openrouter_model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
         "provider": {"zdr": True, "data_collection": "deny"},
+        "usage": {"include": True},
     }
+    if cfg.llm_temperature is not None:
+        payload["temperature"] = cfg.llm_temperature
+    if cfg.llm_max_tokens is not None:
+        payload["max_tokens"] = cfg.llm_max_tokens
     headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "Authorization": f"Bearer {cfg.openrouter_api_key}",
         "Content-Type": "application/json",
         "HTTP-Referer": settings.public_origin,
         "X-Title": "SigSummerRise",
@@ -72,6 +90,14 @@ async def complete(settings: Settings, system: str, user: str) -> str:
     except (KeyError, IndexError, TypeError, ValueError):
         log.error("OpenRouter response missing content")
         raise LlmError("unavailable") from None
+    if issuance_id is not None:
+        prompt_t, completion_t, cost = _extract_usage(data)
+        db.update_llm_usage(
+            issuance_id,
+            prompt_tokens=prompt_t,
+            completion_tokens=completion_t,
+            cost_usd=cost,
+        )
     if not isinstance(content, str) or not content.strip():
         raise LlmError("unavailable")
     return content.strip()

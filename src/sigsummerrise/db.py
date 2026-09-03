@@ -11,6 +11,7 @@ from typing import Any, Callable, TypeVar
 F = TypeVar("F", bound=Callable[..., Any])
 
 REDACTED_SUMMARY = "[redacted]"
+LLM_ISSUANCE_RETENTION_SECONDS = 30 * 24 * 3600
 
 
 def _serialized(fn: F) -> F:
@@ -82,9 +83,17 @@ CREATE INDEX IF NOT EXISTS idx_link_issuance_user_ts ON link_issuance(user_aci, 
 CREATE TABLE IF NOT EXISTS llm_issuance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_aci TEXT NOT NULL,
-    ts INTEGER NOT NULL
+    ts INTEGER NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER,
+    cost_usd REAL
 );
 CREATE INDEX IF NOT EXISTS idx_llm_issuance_user_ts ON llm_issuance(user_aci, ts);
+
+CREATE TABLE IF NOT EXISTS runtime_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    data_json TEXT NOT NULL DEFAULT '{}'
+);
 """
 
 
@@ -159,6 +168,40 @@ class DashboardRow:
     opted_in_at: int | None
 
 
+@dataclass
+class MemberUsageRow:
+    aci: str
+    display_name: str
+    consent_state: str
+    body_count: int
+    opted_in_at: int | None
+    llm_calls_24h: int
+    llm_calls_7d: int
+    cost_usd_7d: float
+    rank_7d: int
+
+
+@dataclass
+class PendingMemberRow:
+    display_name: str
+    consent_state: str
+
+
+@dataclass
+class DashboardStats:
+    opted_in: int
+    not_opted_in: int
+    body_messages: int
+    holes: int
+    redaction_pct_last_n: float
+    messages_24h: int
+    messages_7d: int
+    summaries_7d: int
+    llm_calls_24h: int
+    llm_calls_7d: int
+    cost_usd_7d: float
+
+
 class Database:
     def __init__(self, path: str, key: str) -> None:
         if not key:
@@ -228,6 +271,21 @@ class Database:
             conn.execute(
                 "ALTER TABLE users ADD COLUMN last_unopted_group_notice_at INTEGER"
             )
+        llm_cols = {row[1] for row in conn.execute("PRAGMA table_info(llm_issuance)").fetchall()}
+        if "prompt_tokens" not in llm_cols:
+            conn.execute("ALTER TABLE llm_issuance ADD COLUMN prompt_tokens INTEGER")
+        if "completion_tokens" not in llm_cols:
+            conn.execute("ALTER TABLE llm_issuance ADD COLUMN completion_tokens INTEGER")
+        if "cost_usd" not in llm_cols:
+            conn.execute("ALTER TABLE llm_issuance ADD COLUMN cost_usd REAL")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS runtime_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                data_json TEXT NOT NULL DEFAULT '{}'
+            )
+            """
+        )
 
     @_serialized
     def close(self) -> None:
@@ -543,12 +601,32 @@ class Database:
         return int(row["n"])
 
     @_serialized
-    def record_llm_call(self, aci: str, now: int) -> None:
+    def record_llm_call(self, aci: str, now: int) -> int:
         conn = self.connect()
-        conn.execute("INSERT INTO llm_issuance (user_aci, ts) VALUES (?, ?)", (aci, now))
-        cutoff = now - 3600
+        cur = conn.execute("INSERT INTO llm_issuance (user_aci, ts) VALUES (?, ?)", (aci, now))
+        cutoff = now - LLM_ISSUANCE_RETENTION_SECONDS
         conn.execute("DELETE FROM llm_issuance WHERE ts < ?", (cutoff,))
         conn.commit()
+        return int(cur.lastrowid or 0)
+
+    @_serialized
+    def update_llm_usage(
+        self,
+        row_id: int,
+        *,
+        prompt_tokens: int | None,
+        completion_tokens: int | None,
+        cost_usd: float | None,
+    ) -> None:
+        self.connect().execute(
+            """
+            UPDATE llm_issuance
+            SET prompt_tokens = ?, completion_tokens = ?, cost_usd = ?
+            WHERE id = ?
+            """,
+            (prompt_tokens, completion_tokens, cost_usd, row_id),
+        )
+        self.connect().commit()
 
     @_serialized
     def llm_count(self, aci: str, now: int) -> int:
@@ -557,6 +635,178 @@ class Database:
             (aci, now - 3600),
         ).fetchone()
         return int(row["n"])
+
+    @_serialized
+    def get_runtime_config(self) -> dict[str, Any]:
+        row = self.connect().execute("SELECT data_json FROM runtime_config WHERE id = 1").fetchone()
+        if row is None:
+            return {}
+        try:
+            data = json.loads(row["data_json"])
+        except (TypeError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @_serialized
+    def set_runtime_config(self, data: dict[str, Any]) -> None:
+        conn = self.connect()
+        conn.execute(
+            """
+            INSERT INTO runtime_config (id, data_json) VALUES (1, ?)
+            ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json
+            """,
+            (json.dumps(data),),
+        )
+        conn.commit()
+
+    @_serialized
+    def count_messages_since(self, now: int, seconds: int, *, holes_only: bool | None = None) -> int:
+        cutoff = now - seconds
+        if holes_only is True:
+            clause = "is_hole = 1"
+        elif holes_only is False:
+            clause = "is_hole = 0 AND body IS NOT NULL"
+        else:
+            clause = "1=1"
+        row = self.connect().execute(
+            f"SELECT COUNT(*) AS n FROM messages WHERE ts >= ? AND {clause}",
+            (cutoff,),
+        ).fetchone()
+        return int(row["n"])
+
+    @_serialized
+    def count_summaries_since(self, now: int, seconds: int) -> int:
+        cutoff_ms = (now - seconds) * 1000
+        row = self.connect().execute(
+            "SELECT COUNT(*) AS n FROM summaries WHERE signal_timestamp >= ?",
+            (cutoff_ms,),
+        ).fetchone()
+        return int(row["n"])
+
+    @_serialized
+    def redaction_pct_last_n(self, n: int) -> float:
+        rows = self.last_n_kept(n)
+        if not rows:
+            return 0.0
+        redacted = sum(1 for m in rows if m.is_hole or not m.body)
+        return round(100.0 * redacted / len(rows), 1)
+
+    @_serialized
+    def consent_counts(self) -> tuple[int, int]:
+        row = self.connect().execute(
+            """
+            SELECT
+                SUM(CASE WHEN consent_state = 'opted_in' THEN 1 ELSE 0 END) AS opted_in,
+                SUM(CASE WHEN consent_state != 'opted_in' THEN 1 ELSE 0 END) AS not_opted_in
+            FROM users
+            """
+        ).fetchone()
+        return int(row["opted_in"] or 0), int(row["not_opted_in"] or 0)
+
+    @_serialized
+    def pending_member_rows(self) -> list[PendingMemberRow]:
+        rows = self.connect().execute(
+            """
+            SELECT display_name, consent_state FROM users
+            WHERE consent_state != 'opted_in'
+            ORDER BY display_name COLLATE NOCASE
+            """
+        ).fetchall()
+        return [
+            PendingMemberRow(
+                display_name=row["display_name"] or "Unknown member",
+                consent_state=row["consent_state"],
+            )
+            for row in rows
+        ]
+
+    @_serialized
+    def member_usage_rows(self, now: int, *, sort: str = "name") -> list[MemberUsageRow]:
+        since_24h = now - 86400
+        since_7d = now - 7 * 86400
+        rows = self.connect().execute(
+            """
+            SELECT u.aci, u.display_name, u.consent_state, u.opted_in_at,
+                   (SELECT COUNT(*) FROM messages m
+                    WHERE m.sender_aci = u.aci AND m.is_hole = 0 AND m.body IS NOT NULL) AS body_count,
+                   (SELECT COUNT(*) FROM llm_issuance l
+                    WHERE l.user_aci = u.aci AND l.ts >= ?) AS llm_24h,
+                   (SELECT COUNT(*) FROM llm_issuance l
+                    WHERE l.user_aci = u.aci AND l.ts >= ?) AS llm_7d,
+                   (SELECT COALESCE(SUM(l.cost_usd), 0) FROM llm_issuance l
+                    WHERE l.user_aci = u.aci AND l.ts >= ?) AS cost_7d
+            FROM users u
+            WHERE u.consent_state = 'opted_in'
+            """,
+            (since_24h, since_7d, since_7d),
+        ).fetchall()
+        ranked = sorted(rows, key=lambda r: (-int(r["llm_7d"]), (r["display_name"] or "").lower()))
+        rank_by_aci = {row["aci"]: idx + 1 for idx, row in enumerate(ranked)}
+        members = [
+            MemberUsageRow(
+                aci=row["aci"],
+                display_name=row["display_name"] or "Unknown member",
+                consent_state=row["consent_state"],
+                body_count=int(row["body_count"]),
+                opted_in_at=row["opted_in_at"],
+                llm_calls_24h=int(row["llm_24h"]),
+                llm_calls_7d=int(row["llm_7d"]),
+                cost_usd_7d=float(row["cost_7d"] or 0),
+                rank_7d=rank_by_aci.get(row["aci"], 0),
+            )
+            for row in rows
+        ]
+        if sort == "llm7d":
+            members.sort(key=lambda m: (-m.llm_calls_7d, m.display_name.lower()))
+        else:
+            members.sort(key=lambda m: m.display_name.lower())
+        return members
+
+    @_serialized
+    def llm_calls_since(self, now: int, seconds: int) -> int:
+        row = self.connect().execute(
+            "SELECT COUNT(*) AS n FROM llm_issuance WHERE ts >= ?",
+            (now - seconds,),
+        ).fetchone()
+        return int(row["n"])
+
+    @_serialized
+    def llm_cost_since(self, now: int, seconds: int) -> float:
+        row = self.connect().execute(
+            "SELECT COALESCE(SUM(cost_usd), 0) AS n FROM llm_issuance WHERE ts >= ?",
+            (now - seconds,),
+        ).fetchone()
+        return float(row["n"] or 0)
+
+    @_serialized
+    def total_message_counts(self) -> tuple[int, int]:
+        row = self.connect().execute(
+            """
+            SELECT
+                SUM(CASE WHEN is_hole = 0 AND body IS NOT NULL THEN 1 ELSE 0 END) AS bodies,
+                SUM(CASE WHEN is_hole = 1 THEN 1 ELSE 0 END) AS holes
+            FROM messages
+            """
+        ).fetchone()
+        return int(row["bodies"] or 0), int(row["holes"] or 0)
+
+    @_serialized
+    def dashboard_stats(self, now: int, *, window_n: int = 200) -> DashboardStats:
+        opted_in, not_opted_in = self.consent_counts()
+        bodies, holes = self.total_message_counts()
+        return DashboardStats(
+            opted_in=opted_in,
+            not_opted_in=not_opted_in,
+            body_messages=bodies,
+            holes=holes,
+            redaction_pct_last_n=self.redaction_pct_last_n(window_n),
+            messages_24h=self.count_messages_since(now, 86400),
+            messages_7d=self.count_messages_since(now, 7 * 86400),
+            summaries_7d=self.count_summaries_since(now, 7 * 86400),
+            llm_calls_24h=self.llm_calls_since(now, 86400),
+            llm_calls_7d=self.llm_calls_since(now, 7 * 86400),
+            cost_usd_7d=self.llm_cost_since(now, 7 * 86400),
+        )
 
 
 def _summary_from_row(row: Any | None) -> Summary | None:

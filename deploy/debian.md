@@ -100,8 +100,13 @@ Set at least:
 - `DB_PATH=/var/lib/sigsummerrise/sigsummerrise.db`
 - `DB_KEY` (long random passphrase)
 - `RESPONSES_PATH=copy/responses.json` (optional; copy from `copy/responses.example.json` and customize)
+- `PROMPTS_PATH=copy/prompts.json` (optional; copy from `copy/prompts.example.json` and customize)
 
 Bot reply text (consent messages, roasts, help, errors) lives in JSON under `copy/`. The repo ships a tame `responses.example.json`; operators copy it to `responses.json` (gitignored) for private customization.
+
+LLM system prompts (summarize, follow-up, ask) live in `copy/prompts.example.json` → `copy/prompts.json` with the same pattern. Prompts support `{bot_name}`, `{current_time}`, and `{group_name}` placeholders (see `BOT_NAME`, `BOT_TIMEZONE`, `GROUP_NAME` in `.env`). Chat lines sent to the model include timestamps and window metadata.
+
+Set `OPERATOR_TOKEN` in secrets to enable `/ops` (model, limits, write-only API key, system prompt editor). Leave empty to disable the operator UI entirely.
 
 In the OpenRouter account, disable prompt logging. Every request already sends `provider.zdr=true` and `data_collection=deny`. Do not enable OpenRouter plugins.
 

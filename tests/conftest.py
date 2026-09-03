@@ -24,6 +24,15 @@ def load_responses():
     reset_responses()
 
 
+@pytest.fixture(autouse=True)
+def load_prompts():
+    from sigsummerrise.prompts import init_prompts, reset_prompts
+
+    init_prompts("copy/prompts.example.json")
+    yield
+    reset_prompts()
+
+
 @pytest.fixture
 def settings(tmp_path):
     return Settings(

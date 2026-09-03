@@ -56,6 +56,7 @@ Group/DM  →  signal-cli (JSON-RPC + SSE)  →  sigsummerrise
 | `src/sigsummerrise/auth.py` | Magic tokens + session cookies |
 | `src/sigsummerrise/db.py` | SQLCipher schema and deletes-on-opt-out |
 | `src/sigsummerrise/llm.py` | OpenRouter chat; fail closed; do not log prompt/body |
+| `src/sigsummerrise/prompts.py` | LLM system prompts loaded from `copy/prompts.json` |
 | `src/sigsummerrise/web.py` | Two HTML pages, inline CSS only (templates packaged with the module) |
 | `tests/` | Parser, consent, disappearing, holes, opt-out isolation, magic-link single-use |
 
@@ -127,16 +128,24 @@ Replaced the original shared-password idea.
 3. New token: `secrets.token_urlsafe(32)`, stored **hashed**, ~15 min unused TTL, **one GET then deleted**. Rate limit 3/hour/user (`link_issuance`).
 4. `GET /a/{token}` → new **session** id (also hashed) as cookie → 302 `/` with **no** token in the URL.
 5. Cookie: `HttpOnly`, `SameSite=strict`, `Path=/`, `Max-Age=86400`. Name `__Host-ssr_session` when `PUBLIC_BASE_URL` is `https://`, else `ssr_session` (so localhost HTTP works). `Secure` only on HTTPS.
-6. Unauthenticated `/`: “ask the bot for a link” — **no counts, no names**.
+6. Unauthenticated `/`: login instructions only — **no counts, no names, no group name, no model**.
 7. Each request re-checks the user is still `opted_in` (opt-out drops sessions).
 
 The cookie value is random, not an ACI.
 
 ## Dashboard
 
-Authenticated page: name, “opted in”, body count, opt-in time (UTC). **No** last-collected timestamp (that is a live activity feed), **no** UUIDs, **no** phones, **no** bodies. Currently opted-in members only (opted-out people disappear from the table because their countable rows were deleted).
+Magic-link members (`/`): consent stats, model name, per-member message counts, LLM usage (24h/7d), estimated spend (7d), weekly rank, not-opted-in table, personal hourly quota, FAQ. **No** per-user last-seen, **no** UUIDs, **no** phones, **no** message bodies. Logged-out visitors see none of the above.
 
-App binds `127.0.0.1` only. Caddy in front; **no** basic auth.
+## Operator UI (`/ops`)
+
+Disabled when `OPERATOR_TOKEN` is empty. Separate HttpOnly cookie (`ssr_ops` / `__Host-ssr_ops`). Hot-reloads model, temperature, max tokens, rate limits, write-only OpenRouter key, and system prompts (DB overrides; reset to file). ZDR cannot be disabled in code. Static CSS only; no CDN.
+
+Runtime config in SQLCipher `runtime_config` overrides env/file for LLM settings and prompts. Env still bootstraps first install.
+
+`llm_issuance` rows kept 30 days for leaderboards; hourly rate limit still uses the last hour only. Optional token/cost columns filled from OpenRouter usage when present.
+
+App binds `127.0.0.1` only. Caddy in front; member dashboard has no shared password.
 
 ## OpenRouter
 
@@ -146,9 +155,9 @@ Every completion:
 "provider": { "zdr": true, "data_collection": "deny" }
 ```
 
-Prompt: `Name: text` for opted-in lines, `[redacted]` for holes. No group ids, quote internals, or ACIs. Follow-up resends the **stored window ids** re-hydrated at call time (so opt-out redacts). Operators must disable OpenRouter **account** prompt logging; request flags cannot turn that off if it is already on.
+Prompt: `[timestamp] Name: text` for opted-in lines, `[timestamp] [redacted]` for holes. Window preamble includes message count, time span, and redaction count. No group ids, quote internals, or ACIs. Follow-up resends the **stored window ids** re-hydrated at call time (so opt-out redacts). Operators must disable OpenRouter **account** prompt logging; request flags cannot turn that off if it is already on.
 
-Default model `deepseek/deepseek-v4-flash-0731` — change via env if it lacks a ZDR endpoint. Summarize and follow-up share a per-user cap (`LLM_CALLS_PER_HOUR`, default 10). While the model is running, the bot sends group typing (`sendTyping`) and refreshes it every 10s (Signal drops the indicator after 15s). Typing is stopped before the reply is posted. Instant replies (empty window, rate limit, help, status) do not type.
+Default model `deepseek/deepseek-v4-flash-0731` — change via env or `/ops`. Summarize, ask, and follow-up share a per-user cap (`LLM_CALLS_PER_HOUR`, default 10; hot-reloadable). While the model is running, the bot sends group typing (`sendTyping`) and refreshes it every 10s (Signal drops the indicator after 15s). Typing is stopped before the reply is posted. Instant replies (empty window, rate limit, help, status) do not type.
 
 ## Encryption and process security
 

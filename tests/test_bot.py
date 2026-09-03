@@ -6,6 +6,7 @@ import pytest
 from sigsummerrise import llm
 from sigsummerrise.bot import Bot
 from sigsummerrise.commands import help_text
+from sigsummerrise.prompts import format_current_time, get_prompts, render_system_prompt
 from sigsummerrise.responses import get_responses
 from sigsummerrise.signal_rpc import IncomingMessage
 
@@ -289,7 +290,7 @@ async def test_llm_rate_limit(tmp_db, settings):
 
 @pytest.mark.asyncio
 async def test_summarize_types_while_waiting(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, system, user):
+    async def fake_complete(settings, db, system, user, issuance_id=None):
         return "short recap"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
@@ -327,7 +328,7 @@ async def test_help_works_when_opted_out(tmp_db, settings):
 
 @pytest.mark.asyncio
 async def test_follow_up_chains_on_quoted_reply(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, system, user):
+    async def fake_complete(settings, db, system, user, issuance_id=None):
         return "answer 2"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
@@ -363,7 +364,7 @@ async def test_follow_up_chains_on_quoted_reply(tmp_db, settings, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_follow_up_still_works_on_original_summary(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, system, user):
+    async def fake_complete(settings, db, system, user, issuance_id=None):
         return "follow-up answer"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
@@ -389,7 +390,7 @@ async def test_follow_up_still_works_on_original_summary(tmp_db, settings, monke
 
 @pytest.mark.asyncio
 async def test_summarize_quotes_command_message(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, system, user):
+    async def fake_complete(settings, db, system, user, issuance_id=None):
         return "short recap"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
@@ -415,7 +416,7 @@ async def test_summarize_quotes_command_message(tmp_db, settings, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mention_triggers_ask(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, system, user):
+    async def fake_complete(settings, db, system, user, issuance_id=None):
         assert "Question:" in user
         assert "island" in user.lower()
         return "definitely musk"
@@ -442,7 +443,7 @@ async def test_mention_triggers_ask(tmp_db, settings, monkeypatch):
 async def test_ask_includes_recent_chat_when_available(tmp_db, settings, monkeypatch):
     captured: list[str] = []
 
-    async def fake_complete(settings, system, user):
+    async def fake_complete(settings, db, system, user, issuance_id=None):
         captured.append(user)
         return "answer"
 
@@ -460,18 +461,22 @@ async def test_ask_includes_recent_chat_when_available(tmp_db, settings, monkeyp
             timestamp=301,
         )
     )
-    assert "Recent chat:" in captured[0]
+    assert "Recent chat (2 kept messages):" in captured[0]
+    assert "Asked by: Suisei" in captured[0]
+    assert "Channel: group chat" in captured[0]
     assert "pizza" in captured[0]
 
 
 @pytest.mark.asyncio
 async def test_ask_quote_reply_without_mention(tmp_db, settings, monkeypatch):
     calls: list[str] = []
+    fixed_now = 1_700_000_000
 
-    async def fake_complete(settings, system, user):
+    async def fake_complete(settings, db, system, user, issuance_id=None):
         calls.append(system)
         return "answer one" if len(calls) == 1 else "answer two"
 
+    monkeypatch.setattr("sigsummerrise.bot.time.time", lambda: fixed_now)
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
     signal = FakeSignal()
     bot = Bot(settings, tmp_db, signal)
@@ -495,5 +500,10 @@ async def test_ask_quote_reply_without_mention(tmp_db, settings, monkeypatch):
         )
     )
     assert len(calls) == 2
-    assert calls[1] == llm.FOLLOWUP_SYSTEM
+    assert calls[1] == render_system_prompt(
+        get_prompts().followup_system,
+        bot_name=settings.bot_name,
+        current_time=format_current_time(fixed_now, settings.bot_timezone),
+        group_name=settings.group_name,
+    )
     assert signal.groups[-1][1] == "answer two"

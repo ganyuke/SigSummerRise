@@ -5,11 +5,13 @@ import logging
 import time
 from datetime import datetime, timezone
 
-from sigsummerrise import auth, collect, commands, consent, llm
+from sigsummerrise import auth, collect, commands, consent, health, llm
 from sigsummerrise.commands import Intent, help_text, normalize_command_text
 from sigsummerrise.config import Settings
 from sigsummerrise.db import Database, User
+from sigsummerrise.prompts import format_current_time, init_prompts, render_system_prompt
 from sigsummerrise.responses import get_responses, init_responses
+from sigsummerrise.runtime import resolve_llm_config, resolve_prompts
 from sigsummerrise.signal_rpc import IncomingMessage, SignalClient, normalize_group_id, quote_preview
 
 log = logging.getLogger("sigsummerrise.bot")
@@ -18,12 +20,22 @@ log = logging.getLogger("sigsummerrise.bot")
 class Bot:
     def __init__(self, settings: Settings, db: Database, signal: SignalClient | None = None) -> None:
         init_responses(settings.responses_path)
+        init_prompts(settings.prompts_path)
         self.settings = settings
         self.db = db
         self.signal = signal or SignalClient(settings.signal_http_url, settings.signal_account)
         self.bot_aci = (settings.signal_bot_aci or "").strip().lower()
         self.configured_group = normalize_group_id(settings.signal_group_id)
         self.copy = get_responses()
+
+    def _runtime(self):
+        return resolve_llm_config(self.settings, self.db)
+
+    def _prompts(self):
+        return resolve_prompts(self.settings, self.db)
+
+    def _max_n(self) -> int:
+        return self._runtime().max_n
 
     async def run(self) -> None:
         if not self.configured_group:
@@ -59,6 +71,7 @@ class Bot:
         if self.bot_aci and incoming.sender_aci == self.bot_aci:
             return
         now = int(time.time())
+        health.stamp_signal_event(now)
         if incoming.is_dm:
             await self._handle_dm(incoming, now)
             return
@@ -71,7 +84,7 @@ class Bot:
     async def _handle_dm(self, incoming: IncomingMessage, now: int) -> None:
         user = self.db.upsert_user(incoming.sender_aci, incoming.display_name)
         intent = commands.parse_intent(
-            incoming.text, mentioned=True, in_dm=True, max_n=self.settings.max_n
+            incoming.text, mentioned=True, in_dm=True, max_n=self._max_n()
         )
         if intent.name == "yes":
             self.db.opt_in(incoming.sender_aci, now)
@@ -128,7 +141,7 @@ class Bot:
         if not mentioned:
             return
         intent = commands.parse_intent(
-            incoming.text, mentioned=True, in_dm=False, max_n=self.settings.max_n
+            incoming.text, mentioned=True, in_dm=False, max_n=self._max_n()
         )
         if not user.opted_in:
             if intent.name == "help":
@@ -192,11 +205,39 @@ class Bot:
             return
         await self._reply(incoming, help_text(), in_group)
 
+    def _llm_ctx(self) -> collect.LlmFormatContext:
+        return collect.LlmFormatContext(
+            tz_name=self.settings.bot_timezone,
+            bot_name=self.settings.bot_name,
+        )
+
+    def _llm_system(self, template: str, now: int) -> str:
+        return render_system_prompt(
+            template,
+            bot_name=self.settings.bot_name,
+            current_time=format_current_time(now, self.settings.bot_timezone),
+            group_name=self.settings.group_name,
+        )
+
+    def _asker_name(self, incoming: IncomingMessage) -> str:
+        return (incoming.display_name or "").strip() or "Someone"
+
     def _ask_context_n(self) -> int:
-        n = self.settings.ask_context_n
+        n = self._runtime().ask_context_n
         if n < 0:
             return 0
-        return min(n, self.settings.max_n)
+        return min(n, self._max_n())
+
+    async def _complete_llm(self, system_template: str, user_block: str, now: int, aci: str) -> str:
+        issuance_id = self.db.record_llm_call(aci, now)
+        system = self._llm_system(system_template, now)
+        return await llm.complete(
+            self.settings,
+            self.db,
+            system,
+            user_block,
+            issuance_id=issuance_id,
+        )
 
     async def _ask(self, incoming: IncomingMessage, now: int) -> None:
         if not self._allow_llm(incoming.sender_aci, now):
@@ -208,19 +249,23 @@ class Bot:
             return
         context_n = self._ask_context_n()
         kept = self.db.last_n_kept(context_n) if context_n else []
-        if kept:
-            excerpt = "\n".join(collect.format_window(kept))
-            user_block = f"Recent chat:\n{excerpt}\n\nQuestion:\n{question}"
-        else:
-            user_block = f"Question:\n{question}"
+        ctx = self._llm_ctx()
+        user_block = collect.format_ask_user_block(
+            question=question,
+            messages=kept,
+            asker_name=self._asker_name(incoming),
+            in_group=bool(incoming.group_id),
+            ctx=ctx,
+        )
         group_id = incoming.group_id or self.settings.signal_group_id
         in_group = bool(incoming.group_id)
+        prompts = self._prompts()
         try:
             if in_group:
                 async with self.signal.keep_typing(group_id=group_id):
-                    answer = await llm.complete(self.settings, llm.ASK_SYSTEM, user_block)
+                    answer = await self._complete_llm(prompts.ask_system, user_block, now, incoming.sender_aci)
             else:
-                answer = await llm.complete(self.settings, llm.ASK_SYSTEM, user_block)
+                answer = await self._complete_llm(prompts.ask_system, user_block, now, incoming.sender_aci)
         except llm.LlmError:
             await self._reply(incoming, self.copy.llm_fail, in_group)
             return
@@ -251,10 +296,8 @@ class Bot:
             await self._reply(incoming, self.copy.dashboard_group, True)
 
     def _allow_llm(self, aci: str, now: int) -> bool:
-        if not auth.can_issue_link(self.db.llm_count(aci, now), self.settings.llm_calls_per_hour):
-            return False
-        self.db.record_llm_call(aci, now)
-        return True
+        limit = self._runtime().llm_calls_per_hour
+        return auth.can_issue_link(self.db.llm_count(aci, now), limit)
 
     async def _summarize(self, incoming: IncomingMessage, n: int) -> None:
         kept = self.db.last_n_kept(n)
@@ -265,12 +308,13 @@ class Bot:
         if not self._allow_llm(incoming.sender_aci, now):
             await self._reply_rate_limited(incoming, True)
             return
-        lines = collect.format_window(kept)
-        user_block = "\n".join(lines)
+        ctx = self._llm_ctx()
+        user_block = collect.format_summarize_user_block(kept, ctx=ctx)
         group_id = incoming.group_id or self.settings.signal_group_id
+        prompts = self._prompts()
         try:
             async with self.signal.keep_typing(group_id=group_id):
-                text = await llm.complete(self.settings, llm.SUMMARIZE_SYSTEM, user_block)
+                text = await self._complete_llm(prompts.summarize_system, user_block, now, incoming.sender_aci)
         except llm.LlmError:
             await self._reply(incoming, self.copy.llm_fail, True)
             return
@@ -293,20 +337,20 @@ class Bot:
         question = incoming.text.strip()
         self.db.add_thread(summary.id, incoming.sender_aci, question, incoming.timestamp)
         by_id = self.db.get_messages_by_ids(summary.window_ids)
-        excerpt = "\n".join(collect.format_window_from_ids(summary.window_ids, by_id))
-        thread_lines = collect.format_thread(self.db.get_thread(summary.id))
-        user_block = (
-            "Summary:\n"
-            f"{summary.summary_text}\n\n"
-            "Chat excerpt:\n"
-            f"{excerpt}\n\n"
-            "Follow-up:\n"
-            + "\n".join(thread_lines)
+        thread_entries = self.db.get_thread(summary.id)
+        user_block = collect.format_followup_user_block(
+            summary_text=summary.summary_text,
+            window_ids=summary.window_ids,
+            by_id=by_id,
+            thread_entries=thread_entries,
+            asker_name=self._asker_name(incoming),
+            ctx=self._llm_ctx(),
         )
         group_id = incoming.group_id or self.settings.signal_group_id
+        prompts = self._prompts()
         try:
             async with self.signal.keep_typing(group_id=group_id):
-                answer = await llm.complete(self.settings, llm.FOLLOWUP_SYSTEM, user_block)
+                answer = await self._complete_llm(prompts.followup_system, user_block, now, incoming.sender_aci)
         except llm.LlmError:
             await self._reply(incoming, self.copy.llm_fail, True)
             return

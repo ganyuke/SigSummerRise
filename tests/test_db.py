@@ -29,6 +29,14 @@ def test_llm_issuance_counts(tmp_db: Database):
     assert tmp_db.llm_count(aci, now + 3600 + 2) == 0
 
 
+def test_llm_issuance_retained_beyond_one_hour(tmp_db: Database):
+    aci = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    now = 1_900_000_000
+    tmp_db.record_llm_call(aci, now)
+    tmp_db.record_llm_call(aci, now - 7200)
+    assert tmp_db.llm_calls_since(now, 7 * 86400) == 2
+
+
 def test_require_runtime_settings():
     with pytest.raises(SystemExit, match="DB_KEY"):
         require_runtime_settings(Settings(db_key="", signal_group_id="g"))

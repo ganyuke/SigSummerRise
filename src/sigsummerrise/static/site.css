@@ -1,0 +1,269 @@
+:root {
+  color-scheme: light dark;
+  --bg: #f8f7f4;
+  --fg: #1a1a1a;
+  --border: #c8c4bc;
+  --muted: #5c5c5c;
+  --surface: #fff;
+  --accent: #3d5a80;
+  --accent-hover: #2c4460;
+  --ok: #2d6a4f;
+  --warn: #b08900;
+  --bad: #9b2226;
+  --row-hover: #efece4;
+  --you: #e8f0f8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1c1b19;
+    --fg: #e8e6e1;
+    --border: #4a4844;
+    --muted: #a8a6a0;
+    --surface: #262522;
+    --accent: #8ab4d9;
+    --accent-hover: #a8c8e8;
+    --ok: #52b788;
+    --warn: #e9c46a;
+    --bad: #e76f51;
+    --row-hover: #2f2d2a;
+    --you: #2a3540;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+.wrap {
+  max-width: 52rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+}
+
+header.site-header {
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.75rem;
+}
+
+header.site-header h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+nav.topnav {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+}
+
+nav.topnav a {
+  color: var(--accent);
+  margin-right: 1rem;
+}
+
+h2 {
+  font-size: 1.15rem;
+  margin: 1.75rem 0 0.6rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.2rem;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.75rem 1rem;
+  margin: 1rem 0 1.25rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.stats dt {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin: 0;
+}
+
+.stats dd {
+  margin: 0.1rem 0 0;
+  font-weight: 600;
+}
+
+table.data {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 0.92rem;
+}
+
+table.data th,
+table.data td {
+  text-align: left;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border);
+}
+
+table.data th {
+  background: var(--row-hover);
+  font-weight: 600;
+}
+
+table.data th a {
+  color: inherit;
+  text-decoration: none;
+}
+
+table.data th a:hover {
+  color: var(--accent);
+}
+
+table.data tbody tr:hover {
+  background: var(--row-hover);
+}
+
+table.data tr.you {
+  background: var(--you);
+}
+
+.badge {
+  display: inline-block;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+}
+
+.badge.ok { color: var(--ok); }
+.badge.warn { color: var(--warn); }
+.badge.bad { color: var(--bad); }
+
+.flash {
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 1rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.flash.ok { border-color: var(--ok); color: var(--ok); }
+.flash.bad { border-color: var(--bad); color: var(--bad); }
+
+.muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.roast {
+  font-size: 0.88rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+details.faq {
+  margin: 1.5rem 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  padding: 0.5rem 0.75rem;
+}
+
+details.faq summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+form.ops-form fieldset {
+  border: 1px solid var(--border);
+  margin: 0 0 1.25rem;
+  padding: 0.75rem 1rem;
+  background: var(--surface);
+}
+
+form.ops-form legend {
+  font-weight: 600;
+  padding: 0 0.35rem;
+}
+
+label {
+  display: block;
+  margin: 0.6rem 0 0.2rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+input[type="text"],
+input[type="password"],
+input[type="number"],
+textarea {
+  width: 100%;
+  max-width: 100%;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+}
+
+textarea {
+  min-height: 8rem;
+  font-family: ui-monospace, monospace;
+  font-size: 0.85rem;
+}
+
+.hint {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin: 0.2rem 0 0;
+}
+
+button,
+.button {
+  display: inline-block;
+  margin-top: 0.75rem;
+  padding: 0.4rem 0.9rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  text-decoration: none;
+}
+
+button:hover,
+.button:hover {
+  background: var(--accent-hover);
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid var(--border);
+}
+
+.error-text {
+  color: var(--bad);
+}
+
+.empty {
+  color: var(--muted);
+  font-style: italic;
+}

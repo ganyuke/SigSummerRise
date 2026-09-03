@@ -227,6 +227,18 @@ ensure_responses_file() {
   chmod 0640 "$responses"
 }
 
+ensure_prompts_file() {
+  local prompts="${APP_OPT}/copy/prompts.json"
+  if [[ -f "$prompts" ]]; then
+    log "keeping existing ${prompts}"
+    return
+  fi
+  log "creating ${prompts} from prompts.example.json"
+  cp "${APP_OPT}/copy/prompts.example.json" "$prompts"
+  chown "${APP_USER}:${APP_GROUP}" "$prompts"
+  chmod 0640 "$prompts"
+}
+
 ensure_secrets_file() {
   if [[ ! -f "$SECRETS_FILE" ]]; then
     log "creating ${SECRETS_FILE} from .env.example"
@@ -349,10 +361,14 @@ Required manual steps:
        sudo nano ${APP_OPT}/copy/responses.json
      Created from responses.example.json on first install.
 
-  3. List groups (after joining on the phone):
+  3. Customize LLM system prompts (optional):
+       sudo nano ${APP_OPT}/copy/prompts.json
+     Created from prompts.example.json on first install.
+
+  4. List groups (after joining on the phone):
        sudo -u ${APP_USER} signal-cli --config ${SIGNAL_CLI_CONFIG} -a +E164 listGroups -d
 
-  4. Enable services (after secrets and link are complete):
+  5. Enable services (after secrets and link are complete):
        sudo systemctl enable --now signal-cli sigsummerrise
 EOF
   if [[ "$SKIP_CADDY" -eq 0 ]]; then
@@ -392,6 +408,7 @@ main() {
   sync_application
   install_python_env
   ensure_responses_file
+  ensure_prompts_file
   ensure_secrets_file
   install_systemd_units
   configure_caddy
