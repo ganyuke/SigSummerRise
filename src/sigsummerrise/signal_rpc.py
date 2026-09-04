@@ -32,10 +32,22 @@ class IncomingMessage:
     is_reaction: bool
     has_attachments: bool
     quote_author_aci: str | None = None
+    remote_delete_timestamp: int | None = None
+    admin_delete_target_aci: str | None = None
+    admin_delete_timestamp: int | None = None
 
     @property
     def is_dm(self) -> bool:
         return not self.group_id
+
+    @property
+    def deleted_message(self) -> tuple[str, int] | None:
+        """Author ACI and original message timestamp for delete-for-everyone."""
+        if self.remote_delete_timestamp:
+            return (self.sender_aci, self.remote_delete_timestamp)
+        if self.admin_delete_target_aci and self.admin_delete_timestamp:
+            return (self.admin_delete_target_aci, self.admin_delete_timestamp)
+        return None
 
     @property
     def has_attachments_only(self) -> bool:
@@ -115,6 +127,24 @@ def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
     except (TypeError, ValueError):
         timestamp = 0
     display = str(envelope.get("sourceName") or "").strip()
+    remote_delete = _as_dict(data.get("remoteDelete"))
+    remote_delete_ts = None
+    if remote_delete.get("timestamp") is not None:
+        try:
+            remote_delete_ts = int(remote_delete["timestamp"])
+        except (TypeError, ValueError):
+            remote_delete_ts = None
+    admin_delete = _as_dict(data.get("adminDelete"))
+    admin_target_aci = None
+    admin_delete_ts = None
+    target_raw = admin_delete.get("targetAuthorUuid") or admin_delete.get("targetAuthor")
+    if target_raw:
+        admin_target_aci = str(target_raw).strip().lower()
+    if admin_delete.get("targetSentTimestamp") is not None:
+        try:
+            admin_delete_ts = int(admin_delete["targetSentTimestamp"])
+        except (TypeError, ValueError):
+            admin_delete_ts = None
     return IncomingMessage(
         sender_aci=sender_aci,
         display_name=display,
@@ -127,6 +157,9 @@ def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
         quote_author_aci=quote_author_aci,
         is_reaction=is_reaction,
         has_attachments=bool(attachments),
+        remote_delete_timestamp=remote_delete_ts,
+        admin_delete_target_aci=admin_target_aci,
+        admin_delete_timestamp=admin_delete_ts,
     )
 
 

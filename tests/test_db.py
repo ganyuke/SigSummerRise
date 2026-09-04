@@ -1,7 +1,7 @@
 import pytest
 
 from sigsummerrise.config import Settings
-from sigsummerrise.db import Database
+from sigsummerrise.db import REDACTED_SUMMARY, Database
 from sigsummerrise.main import require_runtime_settings
 
 
@@ -74,6 +74,17 @@ def test_finalize_llm_call_and_provider_stats(tmp_db: Database):
         outcome="timeout",
     )
     assert tmp_db.last_llm_provider() == "ProviderA"
+
+
+def test_delete_message_at(tmp_db: Database):
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Alice")
+    msg_id = tmp_db.insert_body(aci, 100, "bye")
+    sid = tmp_db.save_summary("g", 5000, [msg_id], "sum")
+    assert tmp_db.delete_message_at(aci, 100) is True
+    assert tmp_db.count_bodies(aci) == 0
+    assert tmp_db.get_summary_by_id(sid).summary_text == REDACTED_SUMMARY
+    assert tmp_db.delete_message_at(aci, 100) is False
 
 
 def test_is_bot_message_ts(tmp_db: Database):

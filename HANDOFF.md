@@ -115,6 +115,8 @@ If kept:
 
 Command messages from opted-in users **are** collected (they are group messages). Status counts include them.
 
+**Delete for everyone:** when signal-cli delivers a `remoteDelete` (author deletes their own message) or `adminDelete` (group admin removes a message), the bot deletes the matching stored body (`sender_aci` + timestamp), removes any thread row at that timestamp, and redacts summaries whose window included that message id (or whose posted reply used that `signal_timestamp`). Requires a recent signal-cli that includes `remoteDelete` / `adminDelete` in JSON receive events. **Delete for me** (local-only) is not synced — Signal does not notify other devices.
+
 Opt-out: `DELETE` that user’s bodies and thread rows; holes stay anonymous. Summaries whose window included that user’s message ids have `summary_text` replaced with `[redacted]` so follow-ups do not resend paraphrased deleted text. Re-hydrating a summary window after opt-out treats missing ids as `[redacted]`.
 
 Media is out of scope; if there is text plus an attachment, keep text only.

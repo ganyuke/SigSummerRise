@@ -80,6 +80,16 @@ class Bot:
             return
         now = int(time.time())
         health.stamp_signal_event(now)
+        deleted = incoming.deleted_message
+        if deleted is not None:
+            in_scope = incoming.is_dm or (
+                self.configured_group
+                and normalize_group_id(incoming.group_id) == self.configured_group
+            )
+            if in_scope:
+                author_aci, msg_ts = deleted
+                self.db.delete_message_at(author_aci, msg_ts)
+            return
         if incoming.is_dm:
             await self._handle_dm(incoming, now)
             return

@@ -93,6 +93,53 @@ def test_text_at_name_is_not_a_mention():
     assert not incoming.mentions_bot("11111111-1111-1111-1111-111111111111")
 
 
+def test_parse_remote_delete():
+    payload = {
+        "method": "receive",
+        "params": {
+            "envelope": {
+                "sourceUuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "sourceName": "Suisei",
+                "timestamp": 200,
+                "dataMessage": {
+                    "timestamp": 200,
+                    "message": None,
+                    "remoteDelete": {"timestamp": 100},
+                    "groupInfo": {"groupId": "abc123=="},
+                },
+            }
+        },
+    }
+    incoming = parse_receive(payload)
+    assert incoming is not None
+    assert incoming.deleted_message == ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", 100)
+    assert incoming.text == ""
+
+
+def test_parse_admin_delete():
+    payload = {
+        "method": "receive",
+        "params": {
+            "envelope": {
+                "sourceUuid": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                "sourceName": "Admin",
+                "timestamp": 300,
+                "dataMessage": {
+                    "timestamp": 300,
+                    "adminDelete": {
+                        "targetAuthorUuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+                        "targetSentTimestamp": 150,
+                    },
+                    "groupInfo": {"groupId": "abc123=="},
+                },
+            }
+        },
+    }
+    incoming = parse_receive(payload)
+    assert incoming is not None
+    assert incoming.deleted_message == ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", 150)
+
+
 def test_send_timestamp_nested_shapes():
     assert _send_timestamp({"timestamp": 99}) == 99
     assert _send_timestamp({"results": [{"timestamp": 77}]}) == 77

@@ -6,6 +6,7 @@ import pytest
 from sigsummerrise import llm
 from sigsummerrise.bot import Bot
 from sigsummerrise.commands import help_text
+from sigsummerrise.db import REDACTED_SUMMARY
 from sigsummerrise.prompts import format_current_time, get_prompts, render_system_prompt
 from sigsummerrise.responses import get_responses
 from sigsummerrise.signal_rpc import IncomingMessage
@@ -628,6 +629,63 @@ async def test_busy_reply_while_llm_locked(tmp_db, settings, monkeypatch):
     )
     await first
     assert any(get_responses().llm_busy_group.format(name="Suisei") in text for _, text in signal.groups)
+
+
+@pytest.mark.asyncio
+async def test_remote_delete_removes_stored_message(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 100, "please forget this")
+    assert tmp_db.count_bodies(aci) == 1
+    await bot.handle(
+        _msg(
+            text="",
+            timestamp=200,
+            remote_delete_timestamp=100,
+        )
+    )
+    assert tmp_db.count_bodies(aci) == 0
+
+
+@pytest.mark.asyncio
+async def test_admin_delete_removes_target_message(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    alice = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    admin = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    tmp_db.upsert_user(alice, "Alice")
+    tmp_db.opt_in(alice, 1)
+    tmp_db.insert_body(alice, 150, "removed by admin")
+    await bot.handle(
+        _msg(
+            sender_aci=admin,
+            display_name="Admin",
+            text="",
+            timestamp=300,
+            admin_delete_target_aci=alice,
+            admin_delete_timestamp=150,
+        )
+    )
+    assert tmp_db.count_bodies(alice) == 0
+
+
+@pytest.mark.asyncio
+async def test_remote_delete_redacts_summary_window(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    msg_id = tmp_db.insert_body(aci, 100, "gone now")
+    sid = tmp_db.save_summary("abc123", 5000, [msg_id], "mentioned gone now")
+    await bot.handle(_msg(text="", timestamp=200, remote_delete_timestamp=100))
+    assert tmp_db.count_bodies(aci) == 0
+    summary = tmp_db.get_summary_by_id(sid)
+    assert summary is not None
+    assert summary.summary_text == REDACTED_SUMMARY
 
 
 @pytest.mark.asyncio

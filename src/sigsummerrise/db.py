@@ -386,14 +386,7 @@ class Database:
             int(row["id"])
             for row in conn.execute("SELECT id FROM messages WHERE sender_aci = ?", (aci,)).fetchall()
         }
-        if deleted_ids:
-            for row in conn.execute("SELECT id, window_json FROM summaries").fetchall():
-                window = json.loads(row["window_json"])
-                if any(message_id in deleted_ids for message_id in window):
-                    conn.execute(
-                        "UPDATE summaries SET summary_text = ? WHERE id = ?",
-                        (REDACTED_SUMMARY, row["id"]),
-                    )
+        self._redact_summaries_for_message_ids(conn, deleted_ids)
         conn.execute("DELETE FROM messages WHERE sender_aci = ?", (aci,))
         conn.execute("DELETE FROM threads WHERE sender_aci = ?", (aci,))
         conn.execute("DELETE FROM magic_tokens WHERE user_aci = ?", (aci,))
@@ -410,6 +403,51 @@ class Database:
             (aci,),
         )
         conn.commit()
+
+    @_serialized
+    def delete_message_at(self, sender_aci: str, ts: int) -> bool:
+        """Remove one stored message when Signal delete-for-everyone is received."""
+        conn = self.connect()
+        aci = sender_aci.strip().lower()
+        rows = conn.execute(
+            """
+            SELECT id FROM messages
+            WHERE sender_aci = ? AND ts = ? AND is_hole = 0 AND body IS NOT NULL
+            """,
+            (aci, ts),
+        ).fetchall()
+        deleted_ids = {int(row["id"]) for row in rows}
+        if deleted_ids:
+            placeholders = ",".join("?" * len(deleted_ids))
+            conn.execute(
+                f"DELETE FROM messages WHERE id IN ({placeholders})",
+                tuple(deleted_ids),
+            )
+            self._redact_summaries_for_message_ids(conn, deleted_ids)
+        conn.execute("DELETE FROM threads WHERE sender_aci = ? AND ts = ?", (aci, ts))
+        summary = conn.execute(
+            "SELECT id FROM summaries WHERE signal_timestamp = ?",
+            (ts,),
+        ).fetchone()
+        if summary is not None:
+            conn.execute(
+                "UPDATE summaries SET summary_text = ? WHERE signal_timestamp = ?",
+                (REDACTED_SUMMARY, ts),
+            )
+            conn.execute("DELETE FROM threads WHERE sender_aci IS NULL AND ts = ?", (ts,))
+        conn.commit()
+        return bool(deleted_ids) or summary is not None
+
+    def _redact_summaries_for_message_ids(self, conn: Any, deleted_ids: set[int]) -> None:
+        if not deleted_ids:
+            return
+        for row in conn.execute("SELECT id, window_json FROM summaries").fetchall():
+            window = json.loads(row["window_json"])
+            if any(message_id in deleted_ids for message_id in window):
+                conn.execute(
+                    "UPDATE summaries SET summary_text = ? WHERE id = ?",
+                    (REDACTED_SUMMARY, row["id"]),
+                )
 
     @_serialized
     def set_privacy_flags(
