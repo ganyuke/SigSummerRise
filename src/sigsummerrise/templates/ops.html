@@ -70,6 +70,9 @@
     <input type="text" id="llm_max_tokens" name="llm_max_tokens" value="{{ form.llm_max_tokens }}">
     <label for="llm_calls_per_hour">LLM calls per hour</label>
     <input type="number" id="llm_calls_per_hour" name="llm_calls_per_hour" value="{{ form.llm_calls_per_hour }}" min="1" required>
+    <label for="llm_queue_cap">LLM queue cap (waiting)</label>
+    <input type="number" id="llm_queue_cap" name="llm_queue_cap" value="{{ form.llm_queue_cap }}" min="0" required>
+    <p class="hint">0 = no queue; busy requests are rejected immediately when the model is running.</p>
     <label for="ask_context_n">Ask context lines</label>
     <input type="number" id="ask_context_n" name="ask_context_n" value="{{ form.ask_context_n }}" min="0" required>
     <label for="max_n">Max summarize N</label>

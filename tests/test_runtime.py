@@ -3,6 +3,12 @@ from sigsummerrise.db import Database
 from sigsummerrise.runtime import resolve_llm_config, resolve_prompts, save_runtime_config
 
 
+def test_runtime_queue_cap_override(tmp_db: Database):
+    settings = Settings(llm_queue_cap=3, db_key="k")
+    save_runtime_config(tmp_db, {"llm_queue_cap": 5})
+    assert resolve_llm_config(settings, tmp_db).llm_queue_cap == 5
+
+
 def test_runtime_model_override(tmp_db: Database):
     settings = Settings(openrouter_model="env-model", db_key="k")
     save_runtime_config(tmp_db, {"openrouter_model": "db-model"})

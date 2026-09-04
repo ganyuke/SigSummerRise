@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     session_ttl_seconds: int = 86400
     dashboard_links_per_hour: int = 3
     llm_calls_per_hour: int = 10
+    llm_queue_cap: int = 3
     llm_temperature: float | None = None
     llm_max_tokens: int | None = None
     llm_timeout_seconds: int = 600

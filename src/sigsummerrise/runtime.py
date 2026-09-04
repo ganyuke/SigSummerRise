@@ -26,6 +26,7 @@ class ResolvedLlmConfig:
     llm_temperature: float | None
     llm_max_tokens: int | None
     llm_calls_per_hour: int
+    llm_queue_cap: int
     ask_context_n: int
     max_n: int
     api_key_configured: bool
@@ -64,6 +65,7 @@ def resolve_llm_config(settings: Settings, db: Database) -> ResolvedLlmConfig:
         llm_temperature=float(temp) if temp is not None and temp != "" else None,
         llm_max_tokens=int(max_tokens) if max_tokens is not None and max_tokens != "" else None,
         llm_calls_per_hour=int(data.get("llm_calls_per_hour") or settings.llm_calls_per_hour),
+        llm_queue_cap=int(data.get("llm_queue_cap") if data.get("llm_queue_cap") is not None else settings.llm_queue_cap),
         ask_context_n=int(data.get("ask_context_n") or settings.ask_context_n),
         max_n=int(data.get("max_n") or settings.max_n),
         api_key_configured=bool(api_key),
@@ -99,6 +101,7 @@ def runtime_config_for_ops(settings: Settings, db: Database) -> dict[str, Any]:
         "llm_temperature": data.get("llm_temperature", ""),
         "llm_max_tokens": data.get("llm_max_tokens", ""),
         "llm_calls_per_hour": resolved.llm_calls_per_hour,
+        "llm_queue_cap": resolved.llm_queue_cap,
         "ask_context_n": resolved.ask_context_n,
         "max_n": resolved.max_n,
         "api_key_configured": resolved.api_key_configured,

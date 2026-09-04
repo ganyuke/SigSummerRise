@@ -21,6 +21,7 @@ _REQUIRED_STRINGS = (
     "llm_paused",
     "llm_busy_group",
     "llm_busy_other",
+    "llm_queue_full",
     "summarize_in_dm",
     "empty_window",
     "dashboard_rate",
@@ -48,6 +49,7 @@ class Responses:
     llm_paused: str
     llm_busy_group: str
     llm_busy_other: str
+    llm_queue_full: str
     llm_rate_replies: tuple[str, ...]
     summarize_in_dm: str
     empty_window: str
@@ -171,6 +173,7 @@ def load_responses(path: str) -> Responses:
         llm_paused=data["llm_paused"].strip(),
         llm_busy_group=data["llm_busy_group"].strip(),
         llm_busy_other=data["llm_busy_other"].strip(),
+        llm_queue_full=data["llm_queue_full"].strip(),
         llm_rate_replies=_require_nonempty_strings(data, "llm_rate_replies"),
         summarize_in_dm=data["summarize_in_dm"].strip(),
         empty_window=data["empty_window"].strip(),

@@ -592,11 +592,14 @@ async def test_busy_reply_while_llm_locked(tmp_db, settings, monkeypatch):
     import asyncio
 
     gate = asyncio.Event()
+    calls: list[str] = []
 
     async def slow_complete(settings, db, system, user, **kwargs):
-        gate.set()
+        calls.append(user)
+        if len(calls) == 1:
+            gate.set()
         await asyncio.sleep(0.2)
-        return "slow answer"
+        return f"answer {len(calls)}"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", slow_complete)
     signal = FakeSignal()
@@ -629,6 +632,116 @@ async def test_busy_reply_while_llm_locked(tmp_db, settings, monkeypatch):
     )
     await first
     assert any(get_responses().llm_busy_group.format(name="Suisei") in text for _, text in signal.groups)
+    assert len(calls) == 2
+    assert any("answer 2" in text for _, text in signal.groups)
+
+
+@pytest.mark.asyncio
+async def test_queue_full_rejects_over_cap(tmp_db, settings, monkeypatch):
+    import asyncio
+
+    from sigsummerrise.runtime import save_runtime_config
+
+    save_runtime_config(tmp_db, {"llm_queue_cap": 3})
+    gate = asyncio.Event()
+    llm_calls = 0
+
+    async def slow_complete(settings, db, system, user, **kwargs):
+        nonlocal llm_calls
+        llm_calls += 1
+        if llm_calls == 1:
+            gate.set()
+        await asyncio.sleep(0.3)
+        return "ok"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", slow_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    users = [f"{i:08x}-0000-0000-0000-00000000000{i}" for i in range(5)]
+    for idx, aci in enumerate(users):
+        tmp_db.upsert_user(aci, f"User{idx}")
+        tmp_db.opt_in(aci, 1)
+
+    first = asyncio.create_task(
+        bot.handle(
+            _msg(
+                sender_aci=users[0],
+                display_name="User0",
+                text="@grok one",
+                mentioned_uuids=[settings.signal_bot_aci],
+                timestamp=500,
+            )
+        )
+    )
+    await gate.wait()
+    others = [
+        asyncio.create_task(
+            bot.handle(
+                _msg(
+                    sender_aci=users[idx],
+                    display_name=f"User{idx}",
+                    text=f"@grok q{idx}",
+                    mentioned_uuids=[settings.signal_bot_aci],
+                    timestamp=500 + idx,
+                )
+            )
+        )
+        for idx in range(1, 5)
+    ]
+    await asyncio.gather(*others)
+    await first
+    full = get_responses().llm_queue_full.format(name="User4")
+    assert any(full in text for _, text in signal.groups)
+    assert llm_calls == 4
+
+
+@pytest.mark.asyncio
+async def test_queue_cap_zero_rejects_when_busy(tmp_db, settings, monkeypatch):
+    import asyncio
+
+    from sigsummerrise.runtime import save_runtime_config
+
+    save_runtime_config(tmp_db, {"llm_queue_cap": 0})
+    gate = asyncio.Event()
+
+    async def slow_complete(settings, db, system, user, **kwargs):
+        gate.set()
+        await asyncio.sleep(0.2)
+        return "ok"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", slow_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    alice = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    bob = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(alice, "Alice")
+    tmp_db.upsert_user(bob, "Bob")
+    tmp_db.opt_in(alice, 1)
+    tmp_db.opt_in(bob, 1)
+
+    first = asyncio.create_task(
+        bot.handle(
+            _msg(
+                sender_aci=alice,
+                text="@grok first",
+                mentioned_uuids=[settings.signal_bot_aci],
+                timestamp=600,
+            )
+        )
+    )
+    await gate.wait()
+    await bot.handle(
+        _msg(
+            sender_aci=bob,
+            display_name="Bob",
+            text="@grok second",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=601,
+        )
+    )
+    await first
+    full = get_responses().llm_queue_full.format(name="Bob")
+    assert any(full in text for _, text in signal.groups)
 
 
 @pytest.mark.asyncio

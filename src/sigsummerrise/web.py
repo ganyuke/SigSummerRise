@@ -361,6 +361,7 @@ def mount_routes(app: FastAPI) -> None:
         llm_temperature: str = Form(""),
         llm_max_tokens: str = Form(""),
         llm_calls_per_hour: int = Form(...),
+        llm_queue_cap: int = Form(...),
         ask_context_n: int = Form(...),
         max_n: int = Form(...),
         openrouter_api_key: str = Form(""),
@@ -384,6 +385,7 @@ def mount_routes(app: FastAPI) -> None:
         patch: dict[str, Any] = {
             "openrouter_model": openrouter_model.strip(),
             "llm_calls_per_hour": llm_calls_per_hour,
+            "llm_queue_cap": llm_queue_cap,
             "ask_context_n": ask_context_n,
             "max_n": max_n,
             "summarize_system": summarize_system.strip(),

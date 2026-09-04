@@ -163,7 +163,7 @@ Every completion:
 
 HTTP uses **streaming** (`stream: true`) with an **idle read timeout** (`LLM_READ_IDLE_SECONDS`, default 90) and a **wall-clock cap** (`LLM_TIMEOUT_SECONDS`, default 600) via `asyncio.wait_for`. Timeouts record `outcome=timeout` on the `llm_issuance` row and reply with distinct copy (`llm_timeout`, not `llm_fail`). Successful calls record `latency_ms`, response `model`, and top-level `provider` when present.
 
-The bot handles Signal events concurrently (`create_task` per message). **Instant** paths (help, status, consent, dashboard, opt-out) run in parallel. **LLM** paths share one global lock: a second LLM request while busy gets a privacy-aware “hold on” reply (group names the current target; DM/other says “someone else”). Kill-switch off → `llm_paused` without calling OpenRouter.
+The bot handles Signal events concurrently (`create_task` per message). **Instant** paths (help, status, consent, dashboard, opt-out) run in parallel. **LLM** paths use a FIFO wait queue (default **3** waiting jobs, hot-reloadable as `llm_queue_cap` in `/ops`; `0` = no queue). One model call runs at a time. While busy, new requests get the existing privacy-aware “hold on” reply, then run when their turn comes. Beyond the cap → `llm_queue_full` with the asker’s name. Kill-switch off → `llm_paused` without calling OpenRouter.
 
 Streaming chunks accumulate in memory for the **target user’s dashboard draft only** (`/api/live` `draft` field); Signal still receives the full message when done. Draft text is never logged.
 

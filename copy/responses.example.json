@@ -31,6 +31,7 @@
   "llm_paused": "LLM responses are paused right now. Try again later.",
   "llm_busy_group": "Hold on, I'm busy thinking of what to say to {name} right now.",
   "llm_busy_other": "Hold on, I'm busy thinking of what to say to someone else right now.",
+  "llm_queue_full": "Sorry, {name}, I'm just way too busy right now to answer this. Try again in a bit.",
   "llm_rate_replies": [
     "You've hit your hourly limit. Take a break.",
     "Rate limited. Try again next hour.",

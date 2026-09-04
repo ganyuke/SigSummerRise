@@ -5,6 +5,7 @@ import logging
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
@@ -21,6 +22,13 @@ from sigsummerrise.signal_rpc import IncomingMessage, SignalClient, normalize_gr
 log = logging.getLogger("sigsummerrise.bot")
 
 
+@dataclass
+class _LlmJob:
+    incoming: IncomingMessage
+    in_group: bool
+    work: Callable[[], Awaitable[None]]
+
+
 class Bot:
     def __init__(self, settings: Settings, db: Database, signal: SignalClient | None = None) -> None:
         init_responses(settings.responses_path)
@@ -32,6 +40,23 @@ class Bot:
         self.configured_group = normalize_group_id(settings.signal_group_id)
         self.copy = get_responses()
         self._llm_lock = asyncio.Lock()
+        self._llm_queue: asyncio.Queue[_LlmJob] = asyncio.Queue()
+        self._llm_worker_task: asyncio.Task[None] | None = None
+
+    def _ensure_llm_worker(self) -> None:
+        if self._llm_worker_task is None or self._llm_worker_task.done():
+            self._llm_worker_task = asyncio.create_task(self._llm_worker_loop())
+
+    async def _llm_worker_loop(self) -> None:
+        while True:
+            job = await self._llm_queue.get()
+            try:
+                async with self._llm_lock:
+                    await job.work()
+            except Exception:
+                log.exception("llm queue job failed")
+            finally:
+                self._llm_queue.task_done()
 
     def _runtime(self):
         return resolve_llm_config(self.settings, self.db)
@@ -203,11 +228,33 @@ class Bot:
         if not self._runtime().responses_enabled:
             await self._reply(incoming, self.copy.llm_paused, in_group)
             return
-        if self._llm_lock.locked():
-            await self._reply(incoming, self._busy_message(), in_group)
+        cap = self._runtime().llm_queue_cap
+        if self._llm_lock.locked() and self._llm_queue.qsize() >= cap:
+            await self._reply(
+                incoming,
+                self.copy.llm_queue_full.format(name=self._asker_name(incoming)),
+                in_group,
+            )
             return
-        async with self._llm_lock:
-            await work()
+        will_wait = self._llm_lock.locked() or self._llm_queue.qsize() > 0
+        done: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+
+        async def wrapped() -> None:
+            try:
+                await work()
+            except Exception as exc:
+                if not done.done():
+                    done.set_exception(exc)
+                raise
+            else:
+                if not done.done():
+                    done.set_result(None)
+
+        await self._llm_queue.put(_LlmJob(incoming, in_group, wrapped))
+        self._ensure_llm_worker()
+        if will_wait:
+            await self._reply(incoming, self._busy_message(), in_group)
+        await done
 
     async def _maybe_unopted_group_reply(
         self,
