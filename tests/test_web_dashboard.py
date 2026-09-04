@@ -4,6 +4,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from sigsummerrise.config import Settings
 from sigsummerrise.db import Database
 from sigsummerrise.main import create_app
 
@@ -74,7 +75,32 @@ def test_logout_clears_session(tmp_path, settings):
     url = auth.issue_magic_link(db, settings, aci, int(time.time()))
     client.get(f"/a/{url.rsplit('/', 1)[-1]}", follow_redirects=False)
     assert "Suisei" in client.get("/").text
+    raw_session = client.cookies.get(settings.session_cookie_name)
     client.post("/logout", follow_redirects=False)
+    assert "Suisei" not in client.get("/").text
+    assert db.get_session_aci(raw_session, int(time.time())) is None
+
+
+def test_logout_clears_secure_host_cookie(tmp_path):
+    settings = Settings(
+        db_path=str(tmp_path / "secure.db"),
+        db_key="unit-test-sqlcipher-key",
+        public_base_url="https://example.com",
+        signal_group_id="abc123",
+        signal_bot_aci="11111111-1111-1111-1111-111111111111",
+        responses_path="copy/responses.example.json",
+    )
+    client, db = _client(tmp_path, settings)
+    aci = str(uuid.uuid4())
+    db.upsert_user(aci, "Suisei")
+    db.opt_in(aci, 1)
+    from sigsummerrise import auth
+
+    url = auth.issue_magic_link(db, settings, aci, int(time.time()))
+    client.get(f"/a/{url.rsplit('/', 1)[-1]}", follow_redirects=False)
+    logout = client.post("/logout", follow_redirects=False)
+    set_cookie = logout.headers.get_list("set-cookie")
+    assert any("__Host-ssr_session=" in header and "Secure" in header for header in set_cookie)
     assert "Suisei" not in client.get("/").text
 
 

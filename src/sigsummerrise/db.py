@@ -666,6 +666,14 @@ class Database:
         return row["user_aci"]
 
     @_serialized
+    def delete_session(self, raw_session: str) -> None:
+        self.connect().execute(
+            "DELETE FROM sessions WHERE session_hash = ?",
+            (hash_secret(raw_session),),
+        )
+        self.connect().commit()
+
+    @_serialized
     def record_issuance(self, aci: str, now: int) -> None:
         conn = self.connect()
         conn.execute("INSERT INTO link_issuance (user_aci, ts) VALUES (?, ?)", (aci, now))

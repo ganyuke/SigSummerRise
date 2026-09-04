@@ -43,3 +43,20 @@ def cookie_kwargs(settings: Settings, value: str) -> dict:
         "samesite": "strict",
         "path": "/",
     }
+
+
+def clear_session_cookie(response, settings: Settings) -> None:
+    """Delete the session cookie with the same attributes used at login."""
+    response.delete_cookie(
+        settings.session_cookie_name,
+        path="/",
+        secure=settings.cookie_secure,
+        httponly=True,
+        samesite="strict",
+    )
+
+
+def revoke_session(request, db: Database, settings: Settings) -> None:
+    raw = request.cookies.get(settings.session_cookie_name)
+    if raw:
+        db.delete_session(raw)

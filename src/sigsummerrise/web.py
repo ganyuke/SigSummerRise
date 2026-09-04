@@ -288,14 +288,17 @@ def mount_routes(app: FastAPI) -> None:
             return RedirectResponse("/", status_code=302)
         db.opt_out(aci)
         response = RedirectResponse("/", status_code=302)
-        response.delete_cookie(settings.session_cookie_name, path="/")
+        auth.revoke_session(request, db, settings)
+        auth.clear_session_cookie(response, settings)
         return response
 
     @app.post("/logout")
     def logout(request: Request) -> RedirectResponse:
         settings: Settings = request.app.state.settings
+        db: Database = request.app.state.db
         response = RedirectResponse("/", status_code=302)
-        response.delete_cookie(settings.session_cookie_name, path="/")
+        auth.revoke_session(request, db, settings)
+        auth.clear_session_cookie(response, settings)
         return response
 
     @app.get("/a/{token}", response_class=HTMLResponse)
@@ -341,7 +344,13 @@ def mount_routes(app: FastAPI) -> None:
     def ops_logout(request: Request) -> RedirectResponse:
         settings: Settings = request.app.state.settings
         response = RedirectResponse("/ops", status_code=302)
-        response.delete_cookie(_ops_cookie_name(settings), path="/")
+        response.delete_cookie(
+            _ops_cookie_name(settings),
+            path="/",
+            secure=settings.cookie_secure,
+            httponly=True,
+            samesite="strict",
+        )
         return response
 
     @app.post("/ops")
