@@ -125,6 +125,8 @@ class User:
     opted_in_at: int | None
     last_consent_dm_at: int | None
     last_unopted_group_notice_at: int | None = None
+    exclude_from_summaries: bool = False
+    exclude_from_questions: bool = False
 
     @property
     def opted_in(self) -> bool:
@@ -148,6 +150,7 @@ class Summary:
     signal_timestamp: int
     window_ids: list[int]
     summary_text: str
+    kind: str = "summarize"
 
 
 @dataclass
@@ -271,6 +274,19 @@ class Database:
             conn.execute(
                 "ALTER TABLE users ADD COLUMN last_unopted_group_notice_at INTEGER"
             )
+        if "exclude_from_summaries" not in cols:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN exclude_from_summaries INTEGER NOT NULL DEFAULT 0"
+            )
+        if "exclude_from_questions" not in cols:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN exclude_from_questions INTEGER NOT NULL DEFAULT 0"
+            )
+        summary_cols = {row[1] for row in conn.execute("PRAGMA table_info(summaries)").fetchall()}
+        if "kind" not in summary_cols:
+            conn.execute(
+                "ALTER TABLE summaries ADD COLUMN kind TEXT NOT NULL DEFAULT 'summarize'"
+            )
         llm_cols = {row[1] for row in conn.execute("PRAGMA table_info(llm_issuance)").fetchall()}
         if "prompt_tokens" not in llm_cols:
             conn.execute("ALTER TABLE llm_issuance ADD COLUMN prompt_tokens INTEGER")
@@ -278,6 +294,14 @@ class Database:
             conn.execute("ALTER TABLE llm_issuance ADD COLUMN completion_tokens INTEGER")
         if "cost_usd" not in llm_cols:
             conn.execute("ALTER TABLE llm_issuance ADD COLUMN cost_usd REAL")
+        if "latency_ms" not in llm_cols:
+            conn.execute("ALTER TABLE llm_issuance ADD COLUMN latency_ms INTEGER")
+        if "model" not in llm_cols:
+            conn.execute("ALTER TABLE llm_issuance ADD COLUMN model TEXT")
+        if "provider" not in llm_cols:
+            conn.execute("ALTER TABLE llm_issuance ADD COLUMN provider TEXT")
+        if "outcome" not in llm_cols:
+            conn.execute("ALTER TABLE llm_issuance ADD COLUMN outcome TEXT")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS runtime_config (
@@ -322,6 +346,8 @@ class Database:
             opted_in_at=row["opted_in_at"],
             last_consent_dm_at=row["last_consent_dm_at"],
             last_unopted_group_notice_at=row["last_unopted_group_notice_at"],
+            exclude_from_summaries=bool(row["exclude_from_summaries"]),
+            exclude_from_questions=bool(row["exclude_from_questions"]),
         )
 
     @_serialized
@@ -373,10 +399,54 @@ class Database:
         conn.execute("DELETE FROM magic_tokens WHERE user_aci = ?", (aci,))
         conn.execute("DELETE FROM sessions WHERE user_aci = ?", (aci,))
         conn.execute(
-            "UPDATE users SET consent_state = 'declined', opted_in_at = NULL WHERE aci = ?",
+            """
+            UPDATE users
+            SET consent_state = 'declined',
+                opted_in_at = NULL,
+                exclude_from_summaries = 0,
+                exclude_from_questions = 0
+            WHERE aci = ?
+            """,
             (aci,),
         )
         conn.commit()
+
+    @_serialized
+    def set_privacy_flags(
+        self,
+        aci: str,
+        *,
+        exclude_from_summaries: bool,
+        exclude_from_questions: bool,
+    ) -> None:
+        self.connect().execute(
+            """
+            UPDATE users
+            SET exclude_from_summaries = ?, exclude_from_questions = ?
+            WHERE aci = ? AND consent_state = 'opted_in'
+            """,
+            (int(exclude_from_summaries), int(exclude_from_questions), aci),
+        )
+        self.connect().commit()
+
+    @_serialized
+    def exclude_acis(self, kind: str, except_aci: str) -> frozenset[str]:
+        if kind == "summarize":
+            column = "exclude_from_summaries"
+        elif kind == "ask":
+            column = "exclude_from_questions"
+        else:
+            raise ValueError(f"unknown privacy kind: {kind}")
+        rows = self.connect().execute(
+            f"""
+            SELECT aci FROM users
+            WHERE consent_state = 'opted_in'
+              AND {column} = 1
+              AND aci != ?
+            """,
+            (except_aci,),
+        ).fetchall()
+        return frozenset(row["aci"] for row in rows)
 
     @_serialized
     def insert_body(self, sender_aci: str, ts: int, body: str) -> int:
@@ -463,10 +533,21 @@ class Database:
         ]
 
     @_serialized
-    def save_summary(self, group_id: str, signal_timestamp: int, window_ids: list[int], summary_text: str) -> int:
+    def save_summary(
+        self,
+        group_id: str,
+        signal_timestamp: int,
+        window_ids: list[int],
+        summary_text: str,
+        *,
+        kind: str = "summarize",
+    ) -> int:
         cur = self.connect().execute(
-            "INSERT INTO summaries (group_id, signal_timestamp, window_json, summary_text) VALUES (?, ?, ?, ?)",
-            (group_id, signal_timestamp, json.dumps(window_ids), summary_text),
+            """
+            INSERT INTO summaries (group_id, signal_timestamp, window_json, summary_text, kind)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (group_id, signal_timestamp, json.dumps(window_ids), summary_text, kind),
         )
         self.connect().commit()
         return int(cur.lastrowid)
@@ -618,15 +699,106 @@ class Database:
         completion_tokens: int | None,
         cost_usd: float | None,
     ) -> None:
+        self.finalize_llm_call(
+            row_id,
+            latency_ms=None,
+            model=None,
+            provider=None,
+            outcome="ok",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            cost_usd=cost_usd,
+        )
+
+    @_serialized
+    def finalize_llm_call(
+        self,
+        row_id: int,
+        *,
+        latency_ms: int | None,
+        model: str | None,
+        provider: str | None,
+        outcome: str,
+        prompt_tokens: int | None = None,
+        completion_tokens: int | None = None,
+        cost_usd: float | None = None,
+    ) -> None:
         self.connect().execute(
             """
             UPDATE llm_issuance
-            SET prompt_tokens = ?, completion_tokens = ?, cost_usd = ?
+            SET prompt_tokens = ?, completion_tokens = ?, cost_usd = ?,
+                latency_ms = ?, model = ?, provider = ?, outcome = ?
             WHERE id = ?
             """,
-            (prompt_tokens, completion_tokens, cost_usd, row_id),
+            (
+                prompt_tokens,
+                completion_tokens,
+                cost_usd,
+                latency_ms,
+                model,
+                provider,
+                outcome,
+                row_id,
+            ),
         )
         self.connect().commit()
+
+    @_serialized
+    def last_llm_provider(self) -> str | None:
+        row = self.connect().execute(
+            """
+            SELECT provider FROM llm_issuance
+            WHERE outcome = 'ok' AND provider IS NOT NULL AND provider != ''
+            ORDER BY ts DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if row is None:
+            return None
+        return str(row["provider"])
+
+    @_serialized
+    def llm_latency_stats(self, model: str, now: int, *, days: int = 7) -> tuple[int, int, int]:
+        since = now - days * 86400
+        rows = self.connect().execute(
+            """
+            SELECT latency_ms FROM llm_issuance
+            WHERE outcome = 'ok' AND model = ? AND latency_ms IS NOT NULL AND ts >= ?
+            ORDER BY latency_ms
+            """,
+            (model, since),
+        ).fetchall()
+        values = [int(row["latency_ms"]) for row in rows]
+        if not values:
+            return 0, 0, 0
+        count = len(values)
+        median = values[count // 2]
+        p95_idx = min(int(count * 0.95), count - 1)
+        return count, median, values[p95_idx]
+
+    @_serialized
+    def is_bot_message_ts(
+        self,
+        ts: int,
+        *,
+        bot_aci: str,
+        quote_author_aci: str | None = None,
+    ) -> bool:
+        if quote_author_aci and bot_aci and quote_author_aci.strip().lower() == bot_aci.strip().lower():
+            return True
+        conn = self.connect()
+        if conn.execute(
+            "SELECT 1 FROM summaries WHERE signal_timestamp = ? LIMIT 1",
+            (ts,),
+        ).fetchone():
+            return True
+        row = conn.execute(
+            "SELECT sender_aci FROM threads WHERE ts = ? LIMIT 1",
+            (ts,),
+        ).fetchone()
+        if row is None:
+            return False
+        return row["sender_aci"] is None
 
     @_serialized
     def llm_count(self, aci: str, now: int) -> int:
@@ -736,11 +908,14 @@ class Database:
                    (SELECT COALESCE(SUM(l.cost_usd), 0) FROM llm_issuance l
                     WHERE l.user_aci = u.aci AND l.ts >= ?) AS cost_7d
             FROM users u
-            WHERE u.consent_state = 'opted_in'
             """,
             (since_24h, since_7d, since_7d),
         ).fetchall()
-        ranked = sorted(rows, key=lambda r: (-int(r["llm_7d"]), (r["display_name"] or "").lower()))
+        opted_in_rows = [row for row in rows if row["consent_state"] == "opted_in"]
+        ranked = sorted(
+            opted_in_rows,
+            key=lambda r: (-int(r["llm_7d"]), (r["display_name"] or "").lower()),
+        )
         rank_by_aci = {row["aci"]: idx + 1 for idx, row in enumerate(ranked)}
         members = [
             MemberUsageRow(
@@ -756,10 +931,14 @@ class Database:
             )
             for row in rows
         ]
-        if sort == "llm7d":
-            members.sort(key=lambda m: (-m.llm_calls_7d, m.display_name.lower()))
-        else:
-            members.sort(key=lambda m: m.display_name.lower())
+
+        def _sort_key(member: MemberUsageRow) -> tuple:
+            opted_first = 0 if member.consent_state == "opted_in" else 1
+            if sort == "llm7d":
+                return (opted_first, -member.llm_calls_7d, member.display_name.lower())
+            return (opted_first, member.display_name.lower())
+
+        members.sort(key=_sort_key)
         return members
 
     @_serialized
@@ -812,12 +991,15 @@ class Database:
 def _summary_from_row(row: Any | None) -> Summary | None:
     if row is None:
         return None
+    keys = row.keys()
+    kind = row["kind"] if "kind" in keys else "summarize"
     return Summary(
         id=row["id"],
         group_id=row["group_id"],
         signal_timestamp=row["signal_timestamp"],
         window_ids=json.loads(row["window_json"]),
         summary_text=row["summary_text"],
+        kind=kind or "summarize",
     )
 
 

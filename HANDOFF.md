@@ -22,7 +22,7 @@ There is **no official Signal bot API**. The bot is a **linked `signal-cli` devi
 | Stack | Python (FastAPI + asyncio bot) + `signal-cli`. No Svelte/SPA |
 | Opt-in | Bot **DMs** consent; user replies **Yes** in the DM |
 | Summarize scope | Last N **kept** messages: opted-in bodies + unlabeled `[redacted]` holes |
-| Follow-ups | Any **opted-in** member quote-replies a bot summary |
+| Follow-ups | Quote-reply **only bot messages** (summary, bot thread reply, or quote author = bot ACI) |
 | Model | Configurable cheap/capable (`OPENROUTER_MODEL`); always ZDR |
 | At-rest crypto | SQLCipher (`sqlcipher3-binary`) + passphrase `DB_KEY` |
 | Retention | Keep opted-in bodies until that user opts out (or operator wipes DB) |
@@ -65,7 +65,7 @@ Group/DM  →  signal-cli (JSON-RPC + SSE)  →  sigsummerrise
 1. **ACI/UUID and phone numbers never leave SQLCipher except to Signal itself.** Not in HTML, cookies, logs, group/DM command replies, or OpenRouter payloads. Dashboard identity is **display name only**.
 2. **ZDR is not “the model never sees it.”** Summarize/follow-up still sends plaintext of the window to OpenRouter + a ZDR provider. Minimize that payload (window only, no IDs, unlabeled holes).
 3. **Magic links only in DMs.** Posting `/a/{token}` in the group lets anyone burn the one-time token.
-4. **A user can only mutate their own data.** Opt-out/status/dashboard-link issuance are caller-scoped. Summarize **reads** all kept messages but cannot delete others.
+4. **A user can only mutate their own data.** Opt-out/status/dashboard-link issuance/**privacy flags** are caller-scoped. Summarize **reads** all kept messages but cannot delete others.
 5. **No bodies, tokens, or OpenRouter prompts in journald/stdout.** Caddy must not log `/a/` tokens or query strings (`deploy/Caddyfile.example`). The app disables uvicorn access logs so tokens never hit the unit journal.
 6. **No third-party JS/fonts/CDNs** on the dashboard (would phone home for every viewer). Self-hosted `static/dashboard.js` for live polling is OK.
 7. **OpenRouter plugins/tools are off.** They sit outside ZDR.
@@ -90,7 +90,7 @@ Consent DM must mention: encrypted local storage, OpenRouter ZDR, **summaries ar
 | status | `status` | Caller’s count + opt-in time only |
 | help | `help` / `commands` / `what can you do` (also a bare Signal mention with no extra text) | List commands; **do not** mint a link. Works even if not opted in. |
 | ask | any other @mention text (opted-in) | LLM answer; recent kept **group** chat attached in-group only (`ASK_CONTEXT_N`, default 50). DM asks get the question only — no group transcript. |
-| follow-up | quote-reply a stored summary or any message in that thread (opted-in, even without mention) | LLM over window + summary + thread |
+| follow-up | quote-reply a **bot** summary or bot reply in that thread (opted-in, even without mention) | LLM over window + summary + thread |
 
 Priority: opt-out > summarize > dashboard > status > help > ask. Bare typed `@bot` is **not** a mention. A summarize line must not also issue a magic link.
 
@@ -135,11 +135,13 @@ The cookie value is random, not an ACI.
 
 ## Dashboard
 
-Magic-link members (`/`): consent stats, model name, per-member message counts, LLM usage (24h/7d), estimated spend (7d), weekly rank, not-opted-in table, personal hourly quota, live bot status, FAQ. Stats and status refresh via self-hosted `GET /api/live` polling (session required); DM activity shows as a private reply to other members (only the recipient sees “reply to you”). **No** per-user last-seen, **no** UUIDs, **no** phones, **no** message bodies. Logged-out visitors see none of the above.
+Magic-link members (`/`): consent stats, model name, last successful OpenRouter provider, per-member message counts, LLM usage (24h/7d), estimated spend (7d), weekly rank, **single members table** (opted-in first; not-opted-in rows show red **not opted-in** status and em dashes for numeric columns), personal hourly quota, **privacy controls** (exclude self from others’ summarize/ask windows; collection unchanged), **dashboard opt-out** (same delete as Signal `opt out`), live bot status, **live draft preview for the user being answered** (streaming LLM text; never shown to other members), FAQ. Stats and status refresh via self-hosted `GET /api/live` polling (session required); DM activity shows as a privacy-aware busy reply to other members (only the recipient sees “reply to you”). **No** per-user last-seen, **no** UUIDs, **no** phones, **no** message bodies. Logged-out visitors see none of the above.
+
+**Privacy flags (dashboard only):** `exclude_from_summaries` / `exclude_from_questions` on `users`. Messages stay stored; at LLM format time the requester’s window redacts opted-in members who set the matching flag (unlabeled `[redacted]`). The requester always sees their own lines. Summaries store `kind` (`summarize` | `ask`) so follow-ups use the right flag. Opt-out clears flags and deletes bodies.
 
 ## Operator UI (`/ops`)
 
-Disabled when `OPERATOR_TOKEN` is empty. Separate HttpOnly cookie (`ssr_ops` / `__Host-ssr_ops`). Hot-reloads model, temperature, max tokens, rate limits, write-only OpenRouter key, and system prompts (DB overrides; reset to file). ZDR cannot be disabled in code. Static CSS only; no CDN.
+Disabled when `OPERATOR_TOKEN` is empty. Separate HttpOnly cookie (`ssr_ops` / `__Host-ssr_ops`). Hot-reloads model, temperature, max tokens, rate limits, **LLM kill-switch** (`responses_enabled`), **wall-clock timeout** and **read-idle timeout**, **provider order/ignore/sort** (ZDR + `data_collection=deny` stay hardcoded), write-only OpenRouter key, and system prompts (DB overrides; reset to file). Shows median/p95 latency for the current model (7d). ZDR cannot be disabled in code. Static CSS only; no CDN.
 
 Runtime config in SQLCipher `runtime_config` overrides env/file for LLM settings and prompts. Env still bootstraps first install.
 
@@ -152,12 +154,20 @@ App binds `127.0.0.1` only. Caddy in front; member dashboard has no shared passw
 Every completion:
 
 ```json
-"provider": { "zdr": true, "data_collection": "deny" }
+"provider": { "zdr": true, "data_collection": "deny", "order": [...], "ignore": [...], "sort": "latency" }
 ```
 
-Prompt: `[timestamp] Name: text` for opted-in lines, `[timestamp] [redacted]` for holes. Window preamble includes message count, time span, and redaction count. No group ids, quote internals, or ACIs. Follow-up resends the **stored window ids** re-hydrated at call time (so opt-out redacts). Operators must disable OpenRouter **account** prompt logging; request flags cannot turn that off if it is already on.
+(`order`, `ignore`, `sort` are optional ops overrides.)
 
-Default model `deepseek/deepseek-v4-flash-0731` — change via env or `/ops`. Summarize, ask, and follow-up share a per-user cap (`LLM_CALLS_PER_HOUR`, default 10; hot-reloadable). While the model is running, the bot sends group typing (`sendTyping`) and refreshes it every 10s (Signal drops the indicator after 15s). Typing is stopped before the reply is posted. Instant replies (empty window, rate limit, help, status) do not type.
+HTTP uses **streaming** (`stream: true`) with an **idle read timeout** (`LLM_READ_IDLE_SECONDS`, default 90) and a **wall-clock cap** (`LLM_TIMEOUT_SECONDS`, default 600) via `asyncio.wait_for`. Timeouts record `outcome=timeout` on the `llm_issuance` row and reply with distinct copy (`llm_timeout`, not `llm_fail`). Successful calls record `latency_ms`, response `model`, and top-level `provider` when present.
+
+The bot handles Signal events concurrently (`create_task` per message). **Instant** paths (help, status, consent, dashboard, opt-out) run in parallel. **LLM** paths share one global lock: a second LLM request while busy gets a privacy-aware “hold on” reply (group names the current target; DM/other says “someone else”). Kill-switch off → `llm_paused` without calling OpenRouter.
+
+Streaming chunks accumulate in memory for the **target user’s dashboard draft only** (`/api/live` `draft` field); Signal still receives the full message when done. Draft text is never logged.
+
+Default model `deepseek/deepseek-v4-flash-0731` — change via env or `/ops`. Summarize, ask, and follow-up share a per-user cap (`LLM_CALLS_PER_HOUR`, default 10; hot-reloadable). While the model is running, the bot sends group typing (`sendTyping`) and refreshes it every 10s (Signal drops the indicator after 15s). Typing is stopped before the reply is posted. Instant replies (empty window, rate limit, help, status, busy/paused) do not type.
+
+Prompt: `[timestamp] Name: text` for opted-in lines, `[timestamp] [redacted]` for holes. Window preamble includes message count, time span, and redaction count. No group ids, quote internals, or ACIs. Follow-up resends the **stored window ids** re-hydrated at call time (so opt-out redacts). Operators must disable OpenRouter **account** prompt logging; request flags cannot turn that off if it is already on.
 
 ## Encryption and process security
 

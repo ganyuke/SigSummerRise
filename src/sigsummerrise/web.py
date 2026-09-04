@@ -103,7 +103,7 @@ def _signal_cli_ok(url: str) -> bool:
     try:
         with httpx.Client(timeout=2.0) as client:
             response = client.post(
-                url.rstrip("/"),
+                url.rstrip("/") + "/api/v1/rpc",
                 json={"jsonrpc": "2.0", "method": "version", "id": 1},
             )
             return response.status_code < 500
@@ -125,6 +125,38 @@ def _parse_optional_int(raw: str) -> int | None:
     return int(text)
 
 
+def _member_row_dict(row, *, viewer_aci: str) -> dict[str, Any]:
+    opted_in = row.consent_state == "opted_in"
+    if opted_in:
+        rank_cell = "—"
+        if row.rank_7d == 1 and row.llm_calls_7d > 0:
+            rank_cell = f"#{row.rank_7d} this week's hog"
+        elif row.rank_7d:
+            rank_cell = f"#{row.rank_7d}"
+        return {
+            "display_name": row.display_name,
+            "opted_in": True,
+            "body_count": row.body_count,
+            "llm_calls_24h": row.llm_calls_24h,
+            "llm_calls_7d": row.llm_calls_7d,
+            "cost_display": _fmt_cost(row.cost_usd_7d),
+            "rank_display": rank_cell,
+            "rank_7d": row.rank_7d,
+            "is_you": row.aci == viewer_aci,
+        }
+    return {
+        "display_name": row.display_name,
+        "opted_in": False,
+        "body_count": "—",
+        "llm_calls_24h": "—",
+        "llm_calls_7d": "—",
+        "cost_display": "—",
+        "rank_display": "—",
+        "rank_7d": 0,
+        "is_you": row.aci == viewer_aci,
+    }
+
+
 def _live_status_payload(settings: Settings, db: Database, aci: str, now: int) -> dict[str, Any]:
     runtime = resolve_llm_config(settings, db)
     stats = db.dashboard_stats(now, window_n=runtime.max_n)
@@ -136,26 +168,12 @@ def _live_status_payload(settings: Settings, db: Database, aci: str, now: int) -
         now=now,
     )
     members_raw = db.member_usage_rows(now)
-    members = []
-    for row in members_raw:
-        rank_cell = "—"
-        if row.rank_7d == 1 and row.llm_calls_7d > 0:
-            rank_cell = f"#{row.rank_7d} this week's hog"
-        elif row.rank_7d:
-            rank_cell = f"#{row.rank_7d}"
-        members.append(
-            {
-                "display_name": row.display_name,
-                "body_count": row.body_count,
-                "llm_calls_24h": row.llm_calls_24h,
-                "llm_calls_7d": row.llm_calls_7d,
-                "cost_display": _fmt_cost(row.cost_usd_7d),
-                "rank_display": rank_cell,
-                "is_you": row.aci == aci,
-            }
-        )
-    return {
+    members = [_member_row_dict(row, viewer_aci=aci) for row in members_raw]
+    draft = activity.draft_for_viewer(aci)
+    payload: dict[str, Any] = {
         "bot_name": settings.bot_name,
+        "model": runtime.openrouter_model,
+        "last_provider": db.last_llm_provider(),
         "status": {
             "state": snap.state,
             "message": message,
@@ -179,6 +197,9 @@ def _live_status_payload(settings: Settings, db: Database, aci: str, now: int) -
         },
         "members": members,
     }
+    if draft:
+        payload["draft"] = draft
+    return payload
 
 
 def mount_routes(app: FastAPI) -> None:
@@ -186,7 +207,7 @@ def mount_routes(app: FastAPI) -> None:
     app.mount("/static", StaticFiles(directory=str(static_dir())), name="static")
 
     @app.get("/", response_class=HTMLResponse)
-    def index(request: Request, sort: str = "name") -> HTMLResponse:
+    def index(request: Request, sort: str = "name", saved: str = "") -> HTMLResponse:
         settings: Settings = request.app.state.settings
         db: Database = request.app.state.db
         now = int(time.time())
@@ -198,29 +219,15 @@ def mount_routes(app: FastAPI) -> None:
         runtime = resolve_llm_config(settings, db)
         stats = db.dashboard_stats(now, window_n=runtime.max_n)
         members_raw = db.member_usage_rows(now, sort=sort if sort in ("name", "llm7d") else "name")
-        members = []
-        for row in members_raw:
-            members.append(
-                {
-                    "display_name": row.display_name,
-                    "body_count": row.body_count,
-                    "llm_calls_24h": row.llm_calls_24h,
-                    "llm_calls_7d": row.llm_calls_7d,
-                    "cost_display": _fmt_cost(row.cost_usd_7d),
-                    "rank_7d": row.rank_7d,
-                    "is_you": row.aci == aci,
-                }
-            )
-        pending = [
-            {"display_name": row.display_name, "consent_state": row.consent_state}
-            for row in db.pending_member_rows()
-        ]
+        members = [_member_row_dict(row, viewer_aci=aci) for row in members_raw]
+        flash_ok = "Privacy settings saved." if saved == "privacy" else ""
         html = jinja.get_template("index.html").render(
             page_title=f"{_group_label(settings)} — dashboard",
             group_label=_group_label(settings),
             bot_name=settings.bot_name,
             status_message=activity.idle_message(settings.bot_name),
             model=runtime.openrouter_model,
+            last_provider=db.last_llm_provider(),
             viewer_name=viewer_name,
             stats=stats,
             window_n=runtime.max_n,
@@ -228,7 +235,11 @@ def mount_routes(app: FastAPI) -> None:
             quota_used=db.llm_count(aci, now),
             quota_limit=runtime.llm_calls_per_hour,
             members=members,
-            pending=pending,
+            privacy={
+                "exclude_from_summaries": bool(user and user.exclude_from_summaries),
+                "exclude_from_questions": bool(user and user.exclude_from_questions),
+            },
+            flash_ok=flash_ok,
             limits={
                 "max_n": runtime.max_n,
                 "ask_context_n": runtime.ask_context_n,
@@ -247,6 +258,38 @@ def mount_routes(app: FastAPI) -> None:
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
         payload = _live_status_payload(settings, db, aci, now)
         return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
+    @app.post("/privacy")
+    def save_privacy(
+        request: Request,
+        exclude_from_summaries: str = Form(""),
+        exclude_from_questions: str = Form(""),
+    ) -> RedirectResponse:
+        settings: Settings = request.app.state.settings
+        db: Database = request.app.state.db
+        now = int(time.time())
+        aci = session_aci(request, db, settings, now)
+        if aci is None:
+            return RedirectResponse("/", status_code=302)
+        db.set_privacy_flags(
+            aci,
+            exclude_from_summaries=exclude_from_summaries == "on",
+            exclude_from_questions=exclude_from_questions == "on",
+        )
+        return RedirectResponse("/?saved=privacy", status_code=302)
+
+    @app.post("/opt-out")
+    def dashboard_opt_out(request: Request) -> RedirectResponse:
+        settings: Settings = request.app.state.settings
+        db: Database = request.app.state.db
+        now = int(time.time())
+        aci = session_aci(request, db, settings, now)
+        if aci is None:
+            return RedirectResponse("/", status_code=302)
+        db.opt_out(aci)
+        response = RedirectResponse("/", status_code=302)
+        response.delete_cookie(settings.session_cookie_name, path="/")
+        return response
 
     @app.post("/logout")
     def logout(request: Request) -> RedirectResponse:
@@ -315,6 +358,12 @@ def mount_routes(app: FastAPI) -> None:
         summarize_system: str = Form(...),
         followup_system: str = Form(...),
         ask_system: str = Form(""),
+        responses_enabled: str = Form(""),
+        llm_timeout_seconds: int = Form(...),
+        llm_read_idle_seconds: int = Form(...),
+        provider_order: str = Form(""),
+        provider_ignore: str = Form(""),
+        provider_sort: str = Form(""),
     ) -> HTMLResponse:
         settings: Settings = request.app.state.settings
         db: Database = request.app.state.db
@@ -331,6 +380,12 @@ def mount_routes(app: FastAPI) -> None:
             "summarize_system": summarize_system.strip(),
             "followup_system": followup_system.strip(),
             "ask_system": ask_system.strip(),
+            "responses_enabled": responses_enabled == "on",
+            "llm_timeout_seconds": llm_timeout_seconds,
+            "llm_read_idle_seconds": llm_read_idle_seconds,
+            "provider_order": provider_order.strip(),
+            "provider_ignore": provider_ignore.strip(),
+            "provider_sort": provider_sort.strip(),
         }
         temp = _parse_optional_float(llm_temperature)
         tokens = _parse_optional_int(llm_max_tokens)
@@ -386,6 +441,7 @@ def mount_routes(app: FastAPI) -> None:
         bodies, holes = db.total_message_counts()
         summaries_total = db.connect().execute("SELECT COUNT(*) AS n FROM summaries").fetchone()["n"]
         form = runtime_config_for_ops(settings, db)
+        count, median_ms, p95_ms = db.llm_latency_stats(runtime.openrouter_model, now)
         html = jinja_env.get_template("ops.html").render(
             flash_ok=flash_ok,
             flash_err=flash_err,
@@ -406,6 +462,9 @@ def mount_routes(app: FastAPI) -> None:
                 "holes": holes,
                 "summaries_total": int(summaries_total),
                 "llm_calls_24h": stats.llm_calls_24h,
+                "latency_count": count,
+                "latency_median_ms": median_ms,
+                "latency_p95_ms": p95_ms,
             },
             form=form,
         )

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 Channel = Literal["group", "dm"]
 Mode = Literal["ask", "summarize", "follow_up"]
@@ -24,6 +24,7 @@ _mode: Mode | None = None
 _target_aci: str | None = None
 _target_display_name: str | None = None
 _started_at: int | None = None
+_draft_text: str = ""
 
 
 def set_working(
@@ -34,23 +35,39 @@ def set_working(
     target_display_name: str,
     started_at: int,
 ) -> None:
-    global _state, _channel, _mode, _target_aci, _target_display_name, _started_at
+    global _state, _channel, _mode, _target_aci, _target_display_name, _started_at, _draft_text
     _state = "working"
     _channel = channel
     _mode = mode
     _target_aci = target_aci
     _target_display_name = target_display_name
     _started_at = started_at
+    _draft_text = ""
+
+
+def append_draft(text: str) -> None:
+    global _draft_text
+    if text:
+        _draft_text += text
+
+
+def draft_for_viewer(viewer_aci: str) -> str | None:
+    if _state != "working" or not _draft_text:
+        return None
+    if _target_aci != viewer_aci:
+        return None
+    return _draft_text
 
 
 def clear() -> None:
-    global _state, _channel, _mode, _target_aci, _target_display_name, _started_at
+    global _state, _channel, _mode, _target_aci, _target_display_name, _started_at, _draft_text
     _state = "idle"
     _channel = None
     _mode = None
     _target_aci = None
     _target_display_name = None
     _started_at = None
+    _draft_text = ""
 
 
 def snapshot() -> ActivitySnapshot:

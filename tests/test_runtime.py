@@ -36,3 +36,25 @@ def test_clear_prompts_resets_to_file(tmp_db: Database, settings):
     save_runtime_config(tmp_db, {}, clear_prompts=True)
     prompts = resolve_prompts(settings, tmp_db)
     assert "Signal group" in prompts.summarize_system or "{group_name}" in prompts.summarize_system
+
+
+def test_provider_routing_and_timeouts(tmp_db: Database):
+    settings = Settings(openrouter_model="env-model", db_key="k", llm_timeout_seconds=600)
+    save_runtime_config(
+        tmp_db,
+        {
+            "responses_enabled": False,
+            "llm_timeout_seconds": 120,
+            "llm_read_idle_seconds": 45,
+            "provider_order": "alpha, beta",
+            "provider_ignore": "gamma",
+            "provider_sort": "price",
+        },
+    )
+    cfg = resolve_llm_config(settings, tmp_db)
+    assert cfg.responses_enabled is False
+    assert cfg.llm_timeout_seconds == 120
+    assert cfg.llm_read_idle_seconds == 45
+    assert cfg.provider_order == ("alpha", "beta")
+    assert cfg.provider_ignore == ("gamma",)
+    assert cfg.provider_sort == "price"

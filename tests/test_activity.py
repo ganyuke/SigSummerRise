@@ -114,3 +114,39 @@ def test_clear_returns_idle():
     )
     activity.clear()
     assert activity.snapshot().state == "idle"
+
+
+def test_draft_only_for_target_while_working():
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=1,
+    )
+    activity.append_draft("partial ")
+    activity.append_draft("text")
+    assert activity.draft_for_viewer("alice") == "partial text"
+    assert activity.draft_for_viewer("bob") is None
+
+
+def test_draft_cleared_on_set_working_and_clear():
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=1,
+    )
+    activity.append_draft("old")
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=2,
+    )
+    assert activity.draft_for_viewer("alice") is None
+    activity.append_draft("new")
+    activity.clear()
+    assert activity.draft_for_viewer("alice") is None

@@ -68,6 +68,26 @@ def test_skip_empty_and_media_only():
     )
 
 
+def test_format_line_hides_aci():
+    body = StoredMessage(id=2, sender_aci="aaa", ts=2, body="hi", is_hole=False, display_name="Bob")
+    line = format_line(body, hide_acis=frozenset({"aaa"}))
+    assert line.endswith("[redacted]")
+    assert "Bob" not in line
+    visible = format_line(body, hide_acis=frozenset())
+    assert visible.endswith("Bob: hi")
+
+
+def test_format_summarize_user_block_hides_aci():
+    messages = [
+        StoredMessage(id=1, sender_aci="aaa", ts=100, body="secret", is_hole=False, display_name="Alice"),
+        StoredMessage(id=2, sender_aci="bbb", ts=101, body="public", is_hole=False, display_name="Bob"),
+    ]
+    block = format_summarize_user_block(messages, ctx=LlmFormatContext(), hide_acis=frozenset({"aaa"}))
+    assert "secret" not in block
+    assert "Bob: public" in block
+    assert "Redacted: 1 of 2" in block
+
+
 def test_redaction_is_unlabeled():
     hole = StoredMessage(id=1, sender_aci=None, ts=1, body=None, is_hole=True, display_name="Alice")
     body = StoredMessage(id=2, sender_aci="aaa", ts=2, body="hi", is_hole=False, display_name="Bob")

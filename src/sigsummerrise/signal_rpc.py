@@ -31,6 +31,7 @@ class IncomingMessage:
     quote_timestamp: int | None
     is_reaction: bool
     has_attachments: bool
+    quote_author_aci: str | None = None
 
     @property
     def is_dm(self) -> bool:
@@ -91,6 +92,13 @@ def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
                 mentions.append(str(uid).strip().lower())
     quote = _as_dict(data.get("quote"))
     quote_ts = quote.get("id") or quote.get("timestamp")
+    quote_author_raw = (
+        quote.get("authorUuid")
+        or quote.get("author")
+        or quote.get("authorAci")
+        or quote.get("quoteAuthor")
+    )
+    quote_author_aci = str(quote_author_raw).strip().lower() if quote_author_raw else None
     expires = data.get("expiresInSeconds")
     if expires is None:
         expires = data.get("expireTimer") or 0
@@ -116,6 +124,7 @@ def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
         expires_in_seconds=expires_in,
         mentioned_uuids=mentions,
         quote_timestamp=int(quote_ts) if quote_ts else None,
+        quote_author_aci=quote_author_aci,
         is_reaction=is_reaction,
         has_attachments=bool(attachments),
     )

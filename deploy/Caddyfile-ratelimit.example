@@ -1,0 +1,89 @@
+# SigSummerRise — requires Caddy built with github.com/mholt/caddy-ratelimit
+# App on 127.0.0.1:8000. No HTTP basic auth (magic-link dashboard).
+
+sigsummerrise.example.com {
+	rate_limit {
+		# Operator token brute-force
+		zone ops_login {
+			match {
+				method POST
+				path_regexp ^/ops/login$
+			}
+			key {remote_host}
+			events 10
+			window 1m
+		}
+
+		# Magic-link redemption (one-time burn; app caps issuance via Signal)
+		zone magic_redeem {
+			match {
+				method GET
+				path_regexp ^/a/
+			}
+			key {remote_host}
+			events 15
+			window 1m
+		}
+
+		# OpenRouter test call from /ops
+		zone ops_test {
+			match {
+				method POST
+				path_regexp ^/ops/test$
+			}
+			key {remote_host}
+			events 6
+			window 1m
+		}
+
+		# Dashboard live poll (~20/min per tab at 3s interval)
+		zone api_live {
+			match {
+				method GET
+				path_regexp ^/api/live$
+			}
+			key {remote_host}
+			events 40
+			window 1m
+		}
+
+		# Ops config save (POST /ops only, not /ops/login|logout|test)
+		zone ops_save {
+			match {
+				method POST
+				path_regexp ^/ops$
+			}
+			key {remote_host}
+			events 15
+			window 1m
+		}
+
+		# Catch-all per-IP (/, /static, /logout, authenticated dashboard, etc.)
+		zone site_general {
+			key {remote_host}
+			events 200
+			window 1m
+		}
+	}
+
+	reverse_proxy 127.0.0.1:8000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		-Server
+	}
+
+	log {
+		output file /var/log/caddy/sigsummerrise.log
+		format filter {
+			wrap json
+			fields {
+				request>uri query delete
+				request>uri regexp "^/a/.+" "/a/REDACTED"
+			}
+		}
+	}
+}

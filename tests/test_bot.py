@@ -290,7 +290,7 @@ async def test_llm_rate_limit(tmp_db, settings):
 
 @pytest.mark.asyncio
 async def test_summarize_types_while_waiting(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, db, system, user, issuance_id=None):
+    async def fake_complete(settings, db, system, user, **kwargs):
         return "short recap"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
@@ -328,7 +328,7 @@ async def test_help_works_when_opted_out(tmp_db, settings):
 
 @pytest.mark.asyncio
 async def test_follow_up_chains_on_quoted_reply(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, db, system, user, issuance_id=None):
+    async def fake_complete(settings, db, system, user, **kwargs):
         return "answer 2"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
@@ -364,7 +364,7 @@ async def test_follow_up_chains_on_quoted_reply(tmp_db, settings, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_follow_up_still_works_on_original_summary(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, db, system, user, issuance_id=None):
+    async def fake_complete(settings, db, system, user, **kwargs):
         return "follow-up answer"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
@@ -390,7 +390,7 @@ async def test_follow_up_still_works_on_original_summary(tmp_db, settings, monke
 
 @pytest.mark.asyncio
 async def test_summarize_quotes_command_message(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, db, system, user, issuance_id=None):
+    async def fake_complete(settings, db, system, user, **kwargs):
         return "short recap"
 
     monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
@@ -416,7 +416,7 @@ async def test_summarize_quotes_command_message(tmp_db, settings, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_mention_triggers_ask(tmp_db, settings, monkeypatch):
-    async def fake_complete(settings, db, system, user, issuance_id=None):
+    async def fake_complete(settings, db, system, user, **kwargs):
         assert "Question:" in user
         assert "island" in user.lower()
         return "definitely musk"
@@ -443,7 +443,7 @@ async def test_mention_triggers_ask(tmp_db, settings, monkeypatch):
 async def test_ask_includes_recent_chat_when_available(tmp_db, settings, monkeypatch):
     captured: list[str] = []
 
-    async def fake_complete(settings, db, system, user, issuance_id=None):
+    async def fake_complete(settings, db, system, user, **kwargs):
         captured.append(user)
         return "answer"
 
@@ -471,7 +471,7 @@ async def test_ask_includes_recent_chat_when_available(tmp_db, settings, monkeyp
 async def test_dm_ask_omits_group_context(tmp_db, settings, monkeypatch):
     captured: list[str] = []
 
-    async def fake_complete(settings, db, system, user, issuance_id=None):
+    async def fake_complete(settings, db, system, user, **kwargs):
         captured.append(user)
         return "dm answer"
 
@@ -495,7 +495,7 @@ async def test_ask_quote_reply_without_mention(tmp_db, settings, monkeypatch):
     calls: list[str] = []
     fixed_now = 1_700_000_000
 
-    async def fake_complete(settings, db, system, user, issuance_id=None):
+    async def fake_complete(settings, db, system, user, **kwargs):
         calls.append(system)
         return "answer one" if len(calls) == 1 else "answer two"
 
@@ -530,3 +530,189 @@ async def test_ask_quote_reply_without_mention(tmp_db, settings, monkeypatch):
         group_name=settings.group_name,
     )
     assert signal.groups[-1][1] == "answer two"
+
+
+@pytest.mark.asyncio
+async def test_quote_reply_to_user_thread_ignored(tmp_db, settings, monkeypatch):
+    calls = 0
+
+    async def fake_complete(settings, db, system, user, **kwargs):
+        nonlocal calls
+        calls += 1
+        return "should not run"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    summary_id = tmp_db.save_summary("abc123", 5000, [1], "first summary")
+    tmp_db.add_thread(summary_id, aci, "question 1", 5001)
+
+    await bot.handle(
+        _msg(
+            text="follow up to user",
+            quote_timestamp=5001,
+            timestamp=5003,
+        )
+    )
+    assert calls == 0
+    assert signal.groups == []
+
+
+@pytest.mark.asyncio
+async def test_kill_switch_sends_paused(tmp_db, settings, monkeypatch):
+    from sigsummerrise.runtime import save_runtime_config
+
+    save_runtime_config(tmp_db, {"responses_enabled": False})
+
+    async def fake_complete(settings, db, system, user, **kwargs):
+        raise AssertionError("LLM should not be called when paused")
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(
+        _msg(
+            text="@grok who wins",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=300,
+        )
+    )
+    assert signal.groups[-1][1] == get_responses().llm_paused
+
+
+@pytest.mark.asyncio
+async def test_busy_reply_while_llm_locked(tmp_db, settings, monkeypatch):
+    import asyncio
+
+    gate = asyncio.Event()
+
+    async def slow_complete(settings, db, system, user, **kwargs):
+        gate.set()
+        await asyncio.sleep(0.2)
+        return "slow answer"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", slow_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    other = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.upsert_user(other, "Bob")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.opt_in(other, 1)
+
+    first = asyncio.create_task(
+        bot.handle(
+            _msg(
+                sender_aci=aci,
+                text="@grok think hard",
+                mentioned_uuids=[settings.signal_bot_aci],
+                timestamp=400,
+            )
+        )
+    )
+    await gate.wait()
+    await bot.handle(
+        _msg(
+            sender_aci=other,
+            text="@grok another question",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=401,
+        )
+    )
+    await first
+    assert any(get_responses().llm_busy_group.format(name="Suisei") in text for _, text in signal.groups)
+
+
+@pytest.mark.asyncio
+async def test_summarize_hides_excluded_member_from_other_requester(tmp_db, settings, monkeypatch):
+    captured: list[str] = []
+
+    async def fake_complete(settings, db, system, user, **kwargs):
+        captured.append(user)
+        return "summary"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    alice = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    bob = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(alice, "Alice")
+    tmp_db.upsert_user(bob, "Bob")
+    tmp_db.opt_in(alice, 1)
+    tmp_db.opt_in(bob, 1)
+    tmp_db.set_privacy_flags(alice, exclude_from_summaries=True, exclude_from_questions=False)
+    tmp_db.insert_body(alice, 10, "alice secret")
+    tmp_db.insert_body(bob, 11, "bob public")
+
+    await bot.handle(
+        _msg(
+            sender_aci=bob,
+            text="@grok summarize the past 5 messages",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=300,
+        )
+    )
+    assert "alice secret" not in captured[0]
+    assert "bob public" in captured[0]
+
+    captured.clear()
+    await bot.handle(
+        _msg(
+            sender_aci=alice,
+            text="@grok summarize the past 5 messages",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=301,
+        )
+    )
+    assert "alice secret" in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_ask_hides_excluded_member_from_other_requester(tmp_db, settings, monkeypatch):
+    captured: list[str] = []
+
+    async def fake_complete(settings, db, system, user, **kwargs):
+        captured.append(user)
+        return "answer"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    alice = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    bob = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(alice, "Alice")
+    tmp_db.upsert_user(bob, "Bob")
+    tmp_db.opt_in(alice, 1)
+    tmp_db.opt_in(bob, 1)
+    tmp_db.set_privacy_flags(alice, exclude_from_summaries=False, exclude_from_questions=True)
+    tmp_db.insert_body(alice, 10, "alice pizza")
+    tmp_db.insert_body(bob, 11, "bob tacos")
+
+    await bot.handle(
+        _msg(
+            sender_aci=bob,
+            text="@grok what food",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=300,
+        )
+    )
+    assert "alice pizza" not in captured[0]
+    assert "bob tacos" in captured[0]
+
+    captured.clear()
+    await bot.handle(
+        _msg(
+            sender_aci=alice,
+            text="@grok what food",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=301,
+        )
+    )
+    assert "alice pizza" in captured[0]

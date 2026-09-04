@@ -8,6 +8,17 @@ from sigsummerrise.db import Database
 from sigsummerrise.prompts import PROMPT_KEYS, Prompts, load_prompts
 
 
+def _parse_slug_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
 @dataclass(frozen=True)
 class ResolvedLlmConfig:
     openrouter_api_key: str
@@ -19,6 +30,12 @@ class ResolvedLlmConfig:
     max_n: int
     api_key_configured: bool
     api_key_suffix: str | None
+    responses_enabled: bool
+    llm_timeout_seconds: int
+    llm_read_idle_seconds: int
+    provider_order: tuple[str, ...]
+    provider_ignore: tuple[str, ...]
+    provider_sort: str
 
 
 def _runtime_data(db: Database) -> dict[str, Any]:
@@ -35,6 +52,12 @@ def resolve_llm_config(settings: Settings, db: Database) -> ResolvedLlmConfig:
         suffix = api_key[-4:] if len(api_key) >= 4 else "****"
     temp = data.get("llm_temperature")
     max_tokens = data.get("llm_max_tokens")
+    responses_enabled = data.get("responses_enabled")
+    if responses_enabled is None:
+        responses_enabled = True
+    timeout_raw = data.get("llm_timeout_seconds")
+    idle_raw = data.get("llm_read_idle_seconds")
+    provider_sort = str(data.get("provider_sort") or "").strip()
     return ResolvedLlmConfig(
         openrouter_api_key=api_key,
         openrouter_model=str(data.get("openrouter_model") or settings.openrouter_model).strip(),
@@ -45,6 +68,12 @@ def resolve_llm_config(settings: Settings, db: Database) -> ResolvedLlmConfig:
         max_n=int(data.get("max_n") or settings.max_n),
         api_key_configured=bool(api_key),
         api_key_suffix=suffix,
+        responses_enabled=bool(responses_enabled),
+        llm_timeout_seconds=int(timeout_raw or settings.llm_timeout_seconds),
+        llm_read_idle_seconds=int(idle_raw or settings.llm_read_idle_seconds),
+        provider_order=tuple(_parse_slug_list(data.get("provider_order"))),
+        provider_ignore=tuple(_parse_slug_list(data.get("provider_ignore"))),
+        provider_sort=provider_sort,
     )
 
 
@@ -78,6 +107,12 @@ def runtime_config_for_ops(settings: Settings, db: Database) -> dict[str, Any]:
         "followup_system": prompts.followup_system,
         "ask_system": prompts.ask_system,
         "prompts_from_db": any(data.get(k) for k in PROMPT_KEYS),
+        "responses_enabled": resolved.responses_enabled,
+        "llm_timeout_seconds": resolved.llm_timeout_seconds,
+        "llm_read_idle_seconds": resolved.llm_read_idle_seconds,
+        "provider_order": ", ".join(resolved.provider_order),
+        "provider_ignore": ", ".join(resolved.provider_ignore),
+        "provider_sort": resolved.provider_sort,
     }
 
 

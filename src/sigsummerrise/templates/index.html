@@ -2,7 +2,7 @@
 {% block title %}{{ page_title }}{% endblock %}
 {% block heading %}{{ group_label }}{% endblock %}
 {% block subtitle %}
-<p class="subtitle">Model: <strong>{{ model }}</strong> · OpenRouter, ZDR only</p>
+<p class="subtitle">Model: <strong>{{ model }}</strong> · Last provider: <strong>{{ last_provider or '—' }}</strong></p>
 {% endblock %}
 {% block nav %}
 <nav class="topnav">
@@ -12,10 +12,20 @@
   </form>
 </nav>
 {% endblock %}
+{% block flash %}
+{% if flash_ok %}
+<p class="flash ok">{{ flash_ok }}</p>
+{% endif %}
+{% endblock %}
 {% block content %}
 <div id="bot-status" class="bot-status status-idle" aria-live="polite">
   <span class="status-icon" aria-hidden="true"></span>
   <span id="bot-status-message">{{ status_message }}</span>
+</div>
+
+<div id="live-draft" class="live-draft hidden" aria-live="polite">
+  <h2>Your reply (in progress)</h2>
+  <pre id="live-draft-text"></pre>
 </div>
 
 <dl class="stats">
@@ -33,6 +43,25 @@
 
 <p>Your quota this hour: <strong><span data-live="quota_used">{{ quota_used }}</span> / <span data-live="quota_limit">{{ quota_limit }}</span></strong> LLM calls.</p>
 
+<section class="your-data">
+  <h2>Your data</h2>
+  <form method="post" action="/privacy" class="privacy-form">
+    <label class="checkbox-label">
+      <input type="checkbox" name="exclude_from_summaries"{% if privacy.exclude_from_summaries %} checked{% endif %}>
+      Exclude me from other people's summaries
+    </label>
+    <label class="checkbox-label">
+      <input type="checkbox" name="exclude_from_questions"{% if privacy.exclude_from_questions %} checked{% endif %}>
+      Exclude me from other people's questions
+    </label>
+    <button type="submit">Save</button>
+  </form>
+  <form method="post" action="/opt-out" class="opt-out-form" onsubmit="return confirm('Stops collecting your messages and destroys all of your stored messages on disk. This action is irreversible.');">
+    <p class="opt-out-copy">Stops collecting your messages and destroys all of your stored messages on disk. This action is irreversible.</p>
+    <button type="submit" class="danger">Opt out</button>
+  </form>
+</section>
+
 <h2>Members</h2>
 {% if members %}
 <table class="data" id="members-table">
@@ -49,17 +78,23 @@
   </thead>
   <tbody>
     {% for row in members %}
-    <tr class="{% if row.is_you %}you{% endif %}" data-member="{{ row.display_name }}">
+    <tr class="{% if row.is_you %}you{% endif %}{% if not row.opted_in %} not-opted{% endif %}" data-member="{{ row.display_name }}" data-opted-in="{{ '1' if row.opted_in else '0' }}">
       <td>{{ row.display_name }}{% if row.is_you %} <span class="muted">(you)</span>{% endif %}</td>
-      <td><span class="badge ok">opted in</span></td>
+      <td>
+        {% if row.opted_in %}
+        <span class="badge ok">opted in</span>
+        {% else %}
+        <span class="badge bad">not opted-in</span>
+        {% endif %}
+      </td>
       <td data-live-member="body_count">{{ row.body_count }}</td>
       <td data-live-member="llm_calls_24h">{{ row.llm_calls_24h }}</td>
       <td data-live-member="llm_calls_7d">{{ row.llm_calls_7d }}</td>
       <td data-live-member="cost_display">{{ row.cost_display }}</td>
       <td data-live-member="rank_display">
-        {% if row.rank_7d == 1 and row.llm_calls_7d > 0 %}
+        {% if row.opted_in and row.rank_7d == 1 and row.llm_calls_7d > 0 %}
         #{{ row.rank_7d }} <span class="roast">this week's hog</span>
-        {% elif row.rank_7d %}
+        {% elif row.opted_in and row.rank_7d %}
         #{{ row.rank_7d }}
         {% else %}—{% endif %}
       </td>
@@ -68,24 +103,7 @@
   </tbody>
 </table>
 {% else %}
-<p class="empty">No opted-in members yet.</p>
-{% endif %}
-
-{% if pending %}
-<h2>Not opted in</h2>
-<table class="data">
-  <thead>
-    <tr><th>Name</th><th>Status</th></tr>
-  </thead>
-  <tbody>
-    {% for row in pending %}
-    <tr>
-      <td>{{ row.display_name }}</td>
-      <td><span class="badge warn">{{ row.consent_state }}</span></td>
-    </tr>
-    {% endfor %}
-  </tbody>
-</table>
+<p class="empty">No members yet.</p>
 {% endif %}
 
 <details class="faq">
@@ -96,7 +114,8 @@
     <li>Summaries and @mention answers are visible to the whole group.</li>
     <li>Summarize uses up to <strong>{{ limits.max_n }}</strong> kept messages; ask uses <strong>{{ limits.ask_context_n }}</strong> lines of context.</li>
     <li><strong>{{ limits.llm_calls_per_hour }}</strong> LLM calls per person per hour.</li>
-    <li>Opt out in Signal to delete your stored messages.</li>
+    <li>Privacy checkboxes hide your messages from <em>other people's</em> summarize and ask requests. Your own requests still include your messages. Messages stay stored until you opt out.</li>
+    <li>Opt out here or in Signal (<code>opt out</code>) to delete your stored messages.</li>
   </ul>
 </details>
 <script src="/static/dashboard.js" defer data-bot-name="{{ bot_name }}"></script>

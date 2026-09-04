@@ -57,16 +57,38 @@ def _display_name(name: str | None) -> str:
     return (name or "").strip() or "Someone"
 
 
-def format_line(message: StoredMessage, *, ctx: LlmFormatContext | None = None) -> str:
+def _is_redacted(
+    message: StoredMessage | None,
+    *,
+    hide_acis: frozenset[str] | None = None,
+) -> bool:
+    if message is None or message.is_hole or not message.body:
+        return True
+    if hide_acis and message.sender_aci and message.sender_aci in hide_acis:
+        return True
+    return False
+
+
+def format_line(
+    message: StoredMessage,
+    *,
+    ctx: LlmFormatContext | None = None,
+    hide_acis: frozenset[str] | None = None,
+) -> str:
     ctx = ctx or LlmFormatContext()
     stamp = f"[{format_message_timestamp(message.ts, ctx.tz_name)}] "
-    if message.is_hole or not message.body:
+    if _is_redacted(message, hide_acis=hide_acis):
         return f"{stamp}[redacted]"
     return f"{stamp}{_display_name(message.display_name)}: {message.body}"
 
 
-def format_window(messages: list[StoredMessage], *, ctx: LlmFormatContext | None = None) -> list[str]:
-    return [format_line(message, ctx=ctx) for message in messages]
+def format_window(
+    messages: list[StoredMessage],
+    *,
+    ctx: LlmFormatContext | None = None,
+    hide_acis: frozenset[str] | None = None,
+) -> list[str]:
+    return [format_line(message, ctx=ctx, hide_acis=hide_acis) for message in messages]
 
 
 def format_window_from_ids(
@@ -74,6 +96,7 @@ def format_window_from_ids(
     by_id: dict[int, StoredMessage],
     *,
     ctx: LlmFormatContext | None = None,
+    hide_acis: frozenset[str] | None = None,
 ) -> list[str]:
     ctx = ctx or LlmFormatContext()
     lines: list[str] = []
@@ -82,7 +105,7 @@ def format_window_from_ids(
         if message is None:
             lines.append("[redacted]")
         else:
-            lines.append(format_line(message, ctx=ctx))
+            lines.append(format_line(message, ctx=ctx, hide_acis=hide_acis))
     return lines
 
 
@@ -98,10 +121,14 @@ def format_thread(entries: list[ThreadEntry], *, ctx: LlmFormatContext | None = 
     return lines
 
 
-def _count_redacted(messages: Sequence[StoredMessage | None]) -> int:
+def _count_redacted(
+    messages: Sequence[StoredMessage | None],
+    *,
+    hide_acis: frozenset[str] | None = None,
+) -> int:
     count = 0
     for message in messages:
-        if message is None or message.is_hole or not message.body:
+        if _is_redacted(message, hide_acis=hide_acis):
             count += 1
     return count
 
@@ -111,9 +138,10 @@ def format_transcript_preamble(
     *,
     ctx: LlmFormatContext,
     task_line: str,
+    hide_acis: frozenset[str] | None = None,
 ) -> str:
     count = len(messages)
-    redacted = _count_redacted(messages)
+    redacted = _count_redacted(messages, hide_acis=hide_acis)
     lines = [task_line]
     if count:
         timestamps = [message.ts for message in messages if message is not None and message.ts]
@@ -133,13 +161,19 @@ def format_transcript_preamble(
     return "\n".join(lines)
 
 
-def format_summarize_user_block(messages: list[StoredMessage], *, ctx: LlmFormatContext) -> str:
+def format_summarize_user_block(
+    messages: list[StoredMessage],
+    *,
+    ctx: LlmFormatContext,
+    hide_acis: frozenset[str] | None = None,
+) -> str:
     preamble = format_transcript_preamble(
         messages,
         ctx=ctx,
         task_line=f"Summarize the following {len(messages)} kept messages.",
+        hide_acis=hide_acis,
     )
-    transcript = "\n".join(format_window(messages, ctx=ctx))
+    transcript = "\n".join(format_window(messages, ctx=ctx, hide_acis=hide_acis))
     return f"{preamble}\n\n{transcript}"
 
 
@@ -150,6 +184,7 @@ def format_ask_user_block(
     asker_name: str,
     in_group: bool,
     ctx: LlmFormatContext,
+    hide_acis: frozenset[str] | None = None,
 ) -> str:
     channel = "group chat" if in_group else "private DM"
     header = [f"Channel: {channel}", f"Asked by: {_display_name(asker_name)}"]
@@ -158,9 +193,10 @@ def format_ask_user_block(
             messages,
             ctx=ctx,
             task_line=f"Recent chat ({len(messages)} kept messages):",
+            hide_acis=hide_acis,
         )
         header.append(preamble)
-        header.append("\n".join(format_window(messages, ctx=ctx)))
+        header.append("\n".join(format_window(messages, ctx=ctx, hide_acis=hide_acis)))
     header.append(f"Question:\n{question}")
     return "\n\n".join(header)
 
@@ -173,14 +209,16 @@ def format_followup_user_block(
     thread_entries: list[ThreadEntry],
     asker_name: str,
     ctx: LlmFormatContext,
+    hide_acis: frozenset[str] | None = None,
 ) -> str:
     ordered = [by_id.get(message_id) for message_id in window_ids]
     preamble = format_transcript_preamble(
         ordered,
         ctx=ctx,
         task_line="Continuing a thread from a prior summary or answer.",
+        hide_acis=hide_acis,
     )
-    excerpt = "\n".join(format_window_from_ids(window_ids, by_id, ctx=ctx))
+    excerpt = "\n".join(format_window_from_ids(window_ids, by_id, ctx=ctx, hide_acis=hide_acis))
     thread_lines = "\n".join(format_thread(thread_entries, ctx=ctx))
     return (
         f"{preamble}\n\n"

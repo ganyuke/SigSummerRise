@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator
@@ -30,6 +31,7 @@ class Bot:
         self.bot_aci = (settings.signal_bot_aci or "").strip().lower()
         self.configured_group = normalize_group_id(settings.signal_group_id)
         self.copy = get_responses()
+        self._llm_lock = asyncio.Lock()
 
     def _runtime(self):
         return resolve_llm_config(self.settings, self.db)
@@ -59,16 +61,19 @@ class Bot:
                 log.info("connecting to signal-cli event stream")
                 async for incoming in self.signal.events():
                     delay = 2.0
-                    try:
-                        await self.handle(incoming)
-                    except Exception:
-                        log.exception("failed to handle inbound event")
+                    asyncio.create_task(self._handle_safe(incoming))
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("signal-cli event stream disconnected")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, 30.0)
+
+    async def _handle_safe(self, incoming: IncomingMessage) -> None:
+        try:
+            await self.handle(incoming)
+        except Exception:
+            log.exception("failed to handle inbound event")
 
     async def handle(self, incoming: IncomingMessage) -> None:
         if self.bot_aci and incoming.sender_aci == self.bot_aci:
@@ -116,7 +121,6 @@ class Bot:
 
     async def _handle_group(self, incoming: IncomingMessage, now: int) -> None:
         user = self.db.upsert_user(incoming.sender_aci, incoming.display_name)
-        mentioned = incoming.mentions_bot(self.bot_aci)
         action = collect.classify_inbound(
             expires_in_seconds=incoming.expires_in_seconds,
             text=incoming.text,
@@ -130,15 +134,22 @@ class Bot:
         elif action == "hole":
             self.db.insert_hole(incoming.timestamp)
 
+        mentioned = incoming.mentions_bot(self.bot_aci)
+
         if (
             incoming.quote_timestamp
             and user.opted_in
             and (incoming.text or "").strip()
             and not incoming.is_reaction
+            and self._quote_targets_bot(incoming)
         ):
             summary = self.db.get_summary_for_quote(incoming.quote_timestamp)
             if summary is not None:
-                await self._follow_up(summary, incoming)
+                await self._run_llm_gated(
+                    incoming,
+                    True,
+                    lambda: self._follow_up(summary, incoming),
+                )
                 return
 
         if not mentioned:
@@ -156,6 +167,37 @@ class Bot:
             await self._maybe_unopted_group_reply(incoming, user, now)
             return
         await self._run_intent(intent, incoming, now, in_group=True)
+
+    def _quote_targets_bot(self, incoming: IncomingMessage) -> bool:
+        if not incoming.quote_timestamp:
+            return False
+        return self.db.is_bot_message_ts(
+            incoming.quote_timestamp,
+            bot_aci=self.bot_aci,
+            quote_author_aci=incoming.quote_author_aci,
+        )
+
+    def _busy_message(self) -> str:
+        snap = activity.snapshot()
+        if snap.state == "working" and snap.channel == "group":
+            name = (snap.target_display_name or "").strip() or "someone"
+            return self.copy.llm_busy_group.format(name=name)
+        return self.copy.llm_busy_other
+
+    async def _run_llm_gated(
+        self,
+        incoming: IncomingMessage,
+        in_group: bool,
+        work: Callable[[], Awaitable[None]],
+    ) -> None:
+        if not self._runtime().responses_enabled:
+            await self._reply(incoming, self.copy.llm_paused, in_group)
+            return
+        if self._llm_lock.locked():
+            await self._reply(incoming, self._busy_message(), in_group)
+            return
+        async with self._llm_lock:
+            await work()
 
     async def _maybe_unopted_group_reply(
         self,
@@ -198,13 +240,17 @@ class Bot:
             if not in_group:
                 await self.signal.send_dm(incoming.sender_aci, self.copy.summarize_in_dm)
                 return
-            await self._summarize(incoming, intent.n or 1)
+            await self._run_llm_gated(
+                incoming,
+                True,
+                lambda: self._summarize(incoming, intent.n or 1),
+            )
             return
         if intent.name == "help":
             await self._reply(incoming, help_text(), in_group)
             return
         if intent.name == "ask":
-            await self._ask(incoming, now)
+            await self._run_llm_gated(incoming, in_group, lambda: self._ask(incoming, now))
             return
         await self._reply(incoming, help_text(), in_group)
 
@@ -248,13 +294,22 @@ class Bot:
     async def _complete_llm(self, system_template: str, user_block: str, now: int, aci: str) -> str:
         issuance_id = self.db.record_llm_call(aci, now)
         system = self._llm_system(system_template, now)
+        cfg = self._runtime()
         return await llm.complete(
             self.settings,
             self.db,
             system,
             user_block,
             issuance_id=issuance_id,
+            config=cfg,
+            on_chunk=activity.append_draft,
         )
+
+    async def _handle_llm_error(self, incoming: IncomingMessage, in_group: bool, exc: Exception) -> None:
+        if isinstance(exc, llm.LlmTimeoutError):
+            await self._reply(incoming, self.copy.llm_timeout, in_group)
+        else:
+            await self._reply(incoming, self.copy.llm_fail, in_group)
 
     async def _ask(self, incoming: IncomingMessage, now: int) -> None:
         if not self._allow_llm(incoming.sender_aci, now):
@@ -268,12 +323,14 @@ class Bot:
         context_n = self._ask_context_n() if in_group else 0
         kept = self.db.last_n_kept(context_n) if context_n else []
         ctx = self._llm_ctx()
+        hide_acis = self.db.exclude_acis("ask", incoming.sender_aci)
         user_block = collect.format_ask_user_block(
             question=question,
             messages=kept,
             asker_name=self._asker_name(incoming),
             in_group=in_group,
             ctx=ctx,
+            hide_acis=hide_acis,
         )
         group_id = incoming.group_id or self.settings.signal_group_id
         prompts = self._prompts()
@@ -288,8 +345,8 @@ class Bot:
                     answer = await self._complete_llm(
                         prompts.ask_system, user_block, now, incoming.sender_aci
                     )
-        except llm.LlmError:
-            await self._reply(incoming, self.copy.llm_fail, in_group)
+        except llm.LlmError as exc:
+            await self._handle_llm_error(incoming, in_group, exc)
             return
         ts = await self._reply(incoming, answer, in_group)
         if not in_group or ts is None:
@@ -301,6 +358,7 @@ class Bot:
             ts,
             [m.id for m in kept],
             answer,
+            kind="ask",
         )
         self.db.add_thread(summary_id, incoming.sender_aci, question, incoming.timestamp)
         self.db.add_thread(summary_id, None, answer, ts)
@@ -331,7 +389,8 @@ class Bot:
             await self._reply_rate_limited(incoming, True)
             return
         ctx = self._llm_ctx()
-        user_block = collect.format_summarize_user_block(kept, ctx=ctx)
+        hide_acis = self.db.exclude_acis("summarize", incoming.sender_aci)
+        user_block = collect.format_summarize_user_block(kept, ctx=ctx, hide_acis=hide_acis)
         group_id = incoming.group_id or self.settings.signal_group_id
         prompts = self._prompts()
         try:
@@ -340,8 +399,8 @@ class Bot:
                     text = await self._complete_llm(
                         prompts.summarize_system, user_block, now, incoming.sender_aci
                     )
-        except llm.LlmError:
-            await self._reply(incoming, self.copy.llm_fail, True)
+        except llm.LlmError as exc:
+            await self._handle_llm_error(incoming, True, exc)
             return
         ts = await self._reply(incoming, text, True)
         if ts is None:
@@ -352,6 +411,7 @@ class Bot:
             ts,
             [m.id for m in kept],
             text,
+            kind="summarize",
         )
 
     async def _follow_up(self, summary, incoming: IncomingMessage) -> None:
@@ -363,6 +423,8 @@ class Bot:
         self.db.add_thread(summary.id, incoming.sender_aci, question, incoming.timestamp)
         by_id = self.db.get_messages_by_ids(summary.window_ids)
         thread_entries = self.db.get_thread(summary.id)
+        kind = summary.kind if summary.kind in ("summarize", "ask") else "summarize"
+        hide_acis = self.db.exclude_acis(kind, incoming.sender_aci)
         user_block = collect.format_followup_user_block(
             summary_text=summary.summary_text,
             window_ids=summary.window_ids,
@@ -370,6 +432,7 @@ class Bot:
             thread_entries=thread_entries,
             asker_name=self._asker_name(incoming),
             ctx=self._llm_ctx(),
+            hide_acis=hide_acis,
         )
         group_id = incoming.group_id or self.settings.signal_group_id
         prompts = self._prompts()
@@ -379,8 +442,8 @@ class Bot:
                     answer = await self._complete_llm(
                         prompts.followup_system, user_block, now, incoming.sender_aci
                     )
-        except llm.LlmError:
-            await self._reply(incoming, self.copy.llm_fail, True)
+        except llm.LlmError as exc:
+            await self._handle_llm_error(incoming, True, exc)
             return
         ts = await self._reply(incoming, answer, True)
         self.db.add_thread(summary.id, None, answer, ts or int(time.time() * 1000))

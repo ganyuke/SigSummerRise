@@ -43,3 +43,46 @@ def test_require_runtime_settings():
     with pytest.raises(SystemExit, match="SIGNAL_GROUP_ID"):
         require_runtime_settings(Settings(db_key="k", signal_group_id=""))
     require_runtime_settings(Settings(db_key="k", signal_group_id="abc"))
+
+
+def test_finalize_llm_call_and_provider_stats(tmp_db: Database):
+    aci = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    now = 1_900_000_000
+    row_id = tmp_db.record_llm_call(aci, now)
+    tmp_db.finalize_llm_call(
+        row_id,
+        latency_ms=1200,
+        model="test/model",
+        provider="ProviderA",
+        outcome="ok",
+        prompt_tokens=10,
+        completion_tokens=20,
+        cost_usd=0.01,
+    )
+    assert tmp_db.last_llm_provider() == "ProviderA"
+    count, median, p95 = tmp_db.llm_latency_stats("test/model", now)
+    assert count == 1
+    assert median == 1200
+    assert p95 == 1200
+
+    fail_id = tmp_db.record_llm_call(aci, now + 1)
+    tmp_db.finalize_llm_call(
+        fail_id,
+        latency_ms=500,
+        model="test/model",
+        provider=None,
+        outcome="timeout",
+    )
+    assert tmp_db.last_llm_provider() == "ProviderA"
+
+
+def test_is_bot_message_ts(tmp_db: Database):
+    bot_aci = "11111111-1111-1111-1111-111111111111"
+    summary_id = tmp_db.save_summary("g", 5000, [1], "summary text")
+    tmp_db.add_thread(summary_id, "user-aci", "question", 5001)
+    tmp_db.add_thread(summary_id, None, "bot answer", 5002)
+
+    assert tmp_db.is_bot_message_ts(5000, bot_aci=bot_aci) is True
+    assert tmp_db.is_bot_message_ts(5001, bot_aci=bot_aci) is False
+    assert tmp_db.is_bot_message_ts(5002, bot_aci=bot_aci) is True
+    assert tmp_db.is_bot_message_ts(9999, bot_aci=bot_aci, quote_author_aci=bot_aci) is True

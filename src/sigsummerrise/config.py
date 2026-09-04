@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     llm_calls_per_hour: int = 10
     llm_temperature: float | None = None
     llm_max_tokens: int | None = None
+    llm_timeout_seconds: int = 600
+    llm_read_idle_seconds: int = 90
     operator_token: str = ""
     responses_path: str = "copy/responses.json"
     prompts_path: str = "copy/prompts.json"

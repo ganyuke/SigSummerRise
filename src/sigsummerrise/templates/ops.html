@@ -31,9 +31,35 @@
   <div><dt>Messages / holes</dt><dd>{{ agg.body_messages }} / {{ agg.holes }}</dd></div>
   <div><dt>Summaries</dt><dd>{{ agg.summaries_total }}</dd></div>
   <div><dt>LLM calls (24h)</dt><dd>{{ agg.llm_calls_24h }}</dd></div>
+  <div><dt>Latency median (7d)</dt><dd>{% if agg.latency_count %}{{ (agg.latency_median_ms / 1000) | round(1) }}s (n={{ agg.latency_count }}){% else %}—{% endif %}</dd></div>
+  <div><dt>Latency p95 (7d)</dt><dd>{% if agg.latency_count %}{{ (agg.latency_p95_ms / 1000) | round(1) }}s{% else %}—{% endif %}</dd></div>
 </dl>
 
 <form method="post" action="/ops" class="ops-form">
+  <fieldset>
+    <legend>Responses &amp; routing</legend>
+    <label>
+      <input type="checkbox" name="responses_enabled" value="on"{% if form.responses_enabled %} checked{% endif %}>
+      LLM responses enabled
+    </label>
+    <label for="llm_timeout_seconds">Wall-clock timeout (seconds)</label>
+    <input type="number" id="llm_timeout_seconds" name="llm_timeout_seconds" value="{{ form.llm_timeout_seconds }}" min="30" required>
+    <label for="llm_read_idle_seconds">Read idle timeout (seconds)</label>
+    <input type="number" id="llm_read_idle_seconds" name="llm_read_idle_seconds" value="{{ form.llm_read_idle_seconds }}" min="10" required>
+    <label for="provider_order">Provider order (comma-separated slugs)</label>
+    <input type="text" id="provider_order" name="provider_order" value="{{ form.provider_order }}">
+    <label for="provider_ignore">Provider ignore (comma-separated slugs)</label>
+    <input type="text" id="provider_ignore" name="provider_ignore" value="{{ form.provider_ignore }}">
+    <label for="provider_sort">Provider sort</label>
+    <select id="provider_sort" name="provider_sort">
+      <option value=""{% if not form.provider_sort %} selected{% endif %}>default</option>
+      <option value="price"{% if form.provider_sort == 'price' %} selected{% endif %}>price</option>
+      <option value="throughput"{% if form.provider_sort == 'throughput' %} selected{% endif %}>throughput</option>
+      <option value="latency"{% if form.provider_sort == 'latency' %} selected{% endif %}>latency</option>
+    </select>
+    <p class="hint">ZDR and data_collection=deny stay on in code.</p>
+  </fieldset>
+
   <fieldset>
     <legend>Model &amp; limits</legend>
     <label for="openrouter_model">Model</label>

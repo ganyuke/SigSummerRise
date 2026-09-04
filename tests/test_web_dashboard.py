@@ -145,3 +145,83 @@ def test_api_live_dm_privacy(tmp_path, settings):
     assert "private reply" in bob_resp["status"]["message"]
     assert "Alice" not in bob_resp["status"]["message"]
 
+
+def test_api_live_draft_only_for_target(tmp_path, settings):
+    from sigsummerrise import activity
+
+    settings = settings.model_copy(update={"bot_name": "TestBot"})
+    client, db = _client(tmp_path, settings)
+    alice = str(uuid.uuid4())
+    bob = str(uuid.uuid4())
+    db.upsert_user(alice, "Alice")
+    db.upsert_user(bob, "Bob")
+    db.opt_in(alice, int(time.time()))
+    db.opt_in(bob, int(time.time()))
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci=alice,
+        target_display_name="Alice",
+        started_at=int(time.time()),
+    )
+    activity.append_draft("streaming answer")
+
+    _login(client, db, settings, alice)
+    alice_resp = client.get("/api/live").json()
+    assert alice_resp.get("draft") == "streaming answer"
+
+    client.post("/logout", follow_redirects=False)
+    _login(client, db, settings, bob)
+    bob_resp = client.get("/api/live").json()
+    assert "draft" not in bob_resp
+
+
+def test_merged_members_table(tmp_path, settings):
+    client, db = _client(tmp_path, settings)
+    alice = str(uuid.uuid4())
+    bob = str(uuid.uuid4())
+    db.upsert_user(alice, "Alice")
+    db.upsert_user(bob, "Bob")
+    db.opt_in(alice, int(time.time()))
+    _login(client, db, settings, alice)
+    dash = client.get("/")
+    assert dash.status_code == 200
+    assert "not opted-in" in dash.text
+    assert 'badge bad">not opted-in' in dash.text or "badge bad\">not opted-in" in dash.text
+    assert dash.text.index("opted in") < dash.text.index("not opted-in")
+    assert "<h2>Not opted in</h2>" not in dash.text
+
+
+def test_save_privacy_flags(tmp_path, settings):
+    client, db = _client(tmp_path, settings)
+    aci = str(uuid.uuid4())
+    db.upsert_user(aci, "Alice")
+    db.opt_in(aci, int(time.time()))
+    _login(client, db, settings, aci)
+    response = client.post(
+        "/privacy",
+        data={"exclude_from_summaries": "on", "exclude_from_questions": "on"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 302
+    user = db.get_user(aci)
+    assert user is not None
+    assert user.exclude_from_summaries
+    assert user.exclude_from_questions
+
+
+def test_dashboard_opt_out_deletes_and_logs_out(tmp_path, settings):
+    client, db = _client(tmp_path, settings)
+    aci = str(uuid.uuid4())
+    db.upsert_user(aci, "Alice")
+    db.opt_in(aci, int(time.time()))
+    db.insert_body(aci, 1, "stored")
+    _login(client, db, settings, aci)
+    response = client.post("/opt-out", follow_redirects=False)
+    assert response.status_code == 302
+    assert db.count_bodies(aci) == 0
+    assert db.get_user(aci) is not None
+    assert not db.get_user(aci).opted_in
+    dash = client.get("/")
+    assert "Alice" not in dash.text
+

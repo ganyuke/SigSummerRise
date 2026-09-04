@@ -17,6 +17,10 @@ _REQUIRED_STRINGS = (
     "unopted_group_notice",
     "help_text",
     "llm_fail",
+    "llm_timeout",
+    "llm_paused",
+    "llm_busy_group",
+    "llm_busy_other",
     "summarize_in_dm",
     "empty_window",
     "dashboard_rate",
@@ -40,6 +44,10 @@ class Responses:
     help_text: str
     unknown_replies: tuple[str, ...]
     llm_fail: str
+    llm_timeout: str
+    llm_paused: str
+    llm_busy_group: str
+    llm_busy_other: str
     llm_rate_replies: tuple[str, ...]
     summarize_in_dm: str
     empty_window: str
@@ -159,6 +167,10 @@ def load_responses(path: str) -> Responses:
         help_text=data["help_text"].strip(),
         unknown_replies=_require_nonempty_strings(data, "unknown_replies"),
         llm_fail=data["llm_fail"].strip(),
+        llm_timeout=data["llm_timeout"].strip(),
+        llm_paused=data["llm_paused"].strip(),
+        llm_busy_group=data["llm_busy_group"].strip(),
+        llm_busy_other=data["llm_busy_other"].strip(),
         llm_rate_replies=_require_nonempty_strings(data, "llm_rate_replies"),
         summarize_in_dm=data["summarize_in_dm"].strip(),
         empty_window=data["empty_window"].strip(),
