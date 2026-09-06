@@ -4,7 +4,11 @@
   "consent_clarify": "Just reply Yes or No.\n• Yes = opt in\n• No = decline\n\nIf you say No now, you can still send Yes later to opt in.",
   "opted_in": "You're in.\n\nIn the group, @mention me to:\n• summarize the past N messages\n• status\n• dashboard (I'll DM a link)\n• opt out\n• ask a question\n\nTo ask a follow-up, just quote-reply my message (no @mention needed). You can also use this DM to talk to me directly for commnands without mentioning me.",
   "declined": "Got it. I won't collect your messages.\n\nSend Yes here anytime if you change your mind.",
-  "opted_out": "Opted out. Your stored messages have been deleted.\n\nSend Yes anytime to opt back in.",
+  "opted_out": "Opted out. Your stored messages have been deleted.\n\nReply Yes in this DM to opt back in.",
+  "unopted_command_rejection": "Sorry, I can't do that without your consent.",
+  "opt_out_group_notice": "I've DM'd you with instructions to opt out. This process will be automatically cancelled in {minutes} minutes.",
+  "opt_out_confirm_dm": "You have asked to opt out of {bot_name}'s fun summarization and Q&A service. By opting out, I will no longer collect the contents of your messages, redacting both your name and contents of your messages in future summaries.\n\nI will also forget all **{count} {messages}** that I remember from you. **This particular operation is irreversible.**\n\nWould you like to proceed with opting out? Type \"Please forget me, {bot_name}\". This process will be automatically cancelled in {minutes} minutes. It will also be cancelled if you fail to type this phrase correctly; however, you can restart the process by telling me \"opt out\" again.",
+  "opt_out_pending_cancelled": "Opt-out cancelled. You're still opted in.",
   "unopted_group_notice": "You haven't opted in yet, so I can't run commands for you here. Check your DM with me to opt in.",
   "group_roasts": [
     "You're not opted in yet. Reply Yes in our DM first.",

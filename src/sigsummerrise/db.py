@@ -125,12 +125,16 @@ class User:
     opted_in_at: int | None
     last_consent_dm_at: int | None
     last_unopted_group_notice_at: int | None = None
+    opt_out_pending_until: int | None = None
     exclude_from_summaries: bool = False
     exclude_from_questions: bool = False
 
     @property
     def opted_in(self) -> bool:
         return self.consent_state == "opted_in"
+
+    def opt_out_pending_active(self, now: int) -> bool:
+        return self.opt_out_pending_until is not None and self.opt_out_pending_until > now
 
 
 @dataclass
@@ -282,6 +286,8 @@ class Database:
             conn.execute(
                 "ALTER TABLE users ADD COLUMN exclude_from_questions INTEGER NOT NULL DEFAULT 0"
             )
+        if "opt_out_pending_until" not in cols:
+            conn.execute("ALTER TABLE users ADD COLUMN opt_out_pending_until INTEGER")
         summary_cols = {row[1] for row in conn.execute("PRAGMA table_info(summaries)").fetchall()}
         if "kind" not in summary_cols:
             conn.execute(
@@ -346,6 +352,7 @@ class Database:
             opted_in_at=row["opted_in_at"],
             last_consent_dm_at=row["last_consent_dm_at"],
             last_unopted_group_notice_at=row["last_unopted_group_notice_at"],
+            opt_out_pending_until=row["opt_out_pending_until"],
             exclude_from_summaries=bool(row["exclude_from_summaries"]),
             exclude_from_questions=bool(row["exclude_from_questions"]),
         )
@@ -366,7 +373,13 @@ class Database:
     @_serialized
     def opt_in(self, aci: str, now: int) -> None:
         self.connect().execute(
-            "UPDATE users SET consent_state = 'opted_in', opted_in_at = ? WHERE aci = ?",
+            """
+            UPDATE users
+            SET consent_state = 'opted_in',
+                opted_in_at = ?,
+                opt_out_pending_until = NULL
+            WHERE aci = ?
+            """,
             (now, aci),
         )
         self.connect().commit()
@@ -397,12 +410,42 @@ class Database:
             SET consent_state = 'declined',
                 opted_in_at = NULL,
                 exclude_from_summaries = 0,
-                exclude_from_questions = 0
+                exclude_from_questions = 0,
+                opt_out_pending_until = NULL,
+                last_consent_dm_at = NULL
             WHERE aci = ?
             """,
             (aci,),
         )
         conn.commit()
+
+    @_serialized
+    def start_opt_out_pending(self, aci: str, until: int) -> None:
+        self.connect().execute(
+            "UPDATE users SET opt_out_pending_until = ? WHERE aci = ?",
+            (until, aci),
+        )
+        self.connect().commit()
+
+    @_serialized
+    def clear_opt_out_pending(self, aci: str) -> None:
+        self.connect().execute(
+            "UPDATE users SET opt_out_pending_until = NULL WHERE aci = ?",
+            (aci,),
+        )
+        self.connect().commit()
+
+    @_serialized
+    def expire_opt_out_pending(self, aci: str, now: int) -> None:
+        self.connect().execute(
+            """
+            UPDATE users
+            SET opt_out_pending_until = NULL
+            WHERE aci = ? AND opt_out_pending_until IS NOT NULL AND opt_out_pending_until <= ?
+            """,
+            (aci, now),
+        )
+        self.connect().commit()
 
     @_serialized
     def delete_message_at(self, sender_aci: str, ts: int) -> bool:

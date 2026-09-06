@@ -11,7 +11,7 @@ from typing import AsyncIterator
 
 from sigsummerrise import activity, auth, collect, commands, consent, health, llm
 from sigsummerrise.activity import Mode
-from sigsummerrise.commands import Intent, help_text, normalize_command_text
+from sigsummerrise.commands import Intent, help_text, is_command_intent, matches_opt_out_confirm, normalize_command_text
 from sigsummerrise.config import Settings
 from sigsummerrise.db import Database, User
 from sigsummerrise.prompts import format_current_time, init_prompts, render_system_prompt
@@ -126,6 +126,12 @@ class Bot:
 
     async def _handle_dm(self, incoming: IncomingMessage, now: int) -> None:
         user = self.db.upsert_user(incoming.sender_aci, incoming.display_name)
+        self.db.expire_opt_out_pending(incoming.sender_aci, now)
+        user = self.db.get_user(incoming.sender_aci)
+        assert user is not None
+        if user.opt_out_pending_active(now):
+            if await self._handle_pending_opt_out_dm(incoming, user, now):
+                return
         intent = commands.parse_intent(
             incoming.text, mentioned=True, in_dm=True, max_n=self._max_n()
         )
@@ -135,8 +141,7 @@ class Bot:
             return
         if intent.name == "no":
             if user.opted_in:
-                self.db.opt_out(incoming.sender_aci)
-                await self.signal.send_dm(incoming.sender_aci, self.copy.opted_out)
+                await self._begin_opt_out(incoming, now, in_group=False)
             else:
                 self.db.decline(incoming.sender_aci)
                 await self.signal.send_dm(incoming.sender_aci, self.copy.declined)
@@ -145,12 +150,7 @@ class Bot:
             await self.signal.send_dm(incoming.sender_aci, help_text())
             return
         if not user.opted_in:
-            if consent.should_send_consent_dm(user.consent_state, user.last_consent_dm_at, now):
-                await self._maybe_consent_dm(
-                    incoming.sender_aci, user.consent_state, user.last_consent_dm_at, now
-                )
-            else:
-                await self.signal.send_dm(incoming.sender_aci, self.copy.consent_clarify)
+            await self._handle_unopted_dm(incoming, user, intent, now)
             return
         await self._run_intent(intent, incoming, now, in_group=False)
 
@@ -196,10 +196,7 @@ class Bot:
             if intent.name == "help":
                 await self._reply(incoming, help_text(), True)
                 return
-            await self._maybe_consent_dm(
-                incoming.sender_aci, user.consent_state, user.last_consent_dm_at, now
-            )
-            await self._maybe_unopted_group_reply(incoming, user, now)
+            await self._handle_unopted_group(incoming, user, now)
             return
         await self._run_intent(intent, incoming, now, in_group=True)
 
@@ -256,12 +253,33 @@ class Bot:
             await self._reply(incoming, self._busy_message(), in_group)
         await done
 
-    async def _maybe_unopted_group_reply(
+    async def _handle_unopted_dm(
+        self,
+        incoming: IncomingMessage,
+        user: User,
+        intent: Intent,
+        now: int,
+    ) -> None:
+        if consent.should_send_consent_dm(user.consent_state, user.last_consent_dm_at, now):
+            await self._maybe_consent_dm(
+                incoming.sender_aci, user.consent_state, user.last_consent_dm_at, now
+            )
+            return
+        if is_command_intent(intent):
+            await self.signal.send_dm(incoming.sender_aci, self.copy.unopted_command_rejection)
+            return
+        await self.signal.send_dm(incoming.sender_aci, self.copy.consent_clarify)
+
+    async def _handle_unopted_group(
         self,
         incoming: IncomingMessage,
         user: User,
         now: int,
     ) -> None:
+        if consent.should_send_consent_dm(user.consent_state, user.last_consent_dm_at, now):
+            await self._maybe_consent_dm(
+                incoming.sender_aci, user.consent_state, user.last_consent_dm_at, now
+            )
         if consent.should_send_unopted_group_notice(user.last_unopted_group_notice_at, now):
             await self._reply(incoming, self.copy.unopted_group_notice, True)
             self.db.set_unopted_group_notice_at(incoming.sender_aci, now)
@@ -277,8 +295,7 @@ class Bot:
 
     async def _run_intent(self, intent: Intent, incoming: IncomingMessage, now: int, in_group: bool) -> None:
         if intent.name == "opt_out":
-            self.db.opt_out(incoming.sender_aci)
-            await self._reply(incoming, self.copy.opted_out, in_group)
+            await self._begin_opt_out(incoming, now, in_group=in_group)
             return
         if intent.name == "status":
             user = self.db.get_user(incoming.sender_aci)
@@ -519,6 +536,62 @@ class Bot:
 
     async def _reply_rate_limited(self, incoming: IncomingMessage, in_group: bool) -> None:
         await self._reply(incoming, self.copy.pick_llm_rate_reply(), in_group)
+
+    def _opt_out_confirm_minutes(self) -> int:
+        seconds = self.settings.opt_out_confirm_ttl_seconds
+        return max(1, (seconds + 59) // 60)
+
+    def _opt_out_confirm_dm_text(self, aci: str) -> str:
+        count = self.db.count_bodies(aci)
+        return self.copy.format_opt_out_confirm_dm(
+            self.settings.bot_name,
+            count,
+            self._opt_out_confirm_minutes(),
+        )
+
+    async def _begin_opt_out(
+        self,
+        incoming: IncomingMessage,
+        now: int,
+        *,
+        in_group: bool,
+    ) -> None:
+        until = now + self.settings.opt_out_confirm_ttl_seconds
+        self.db.start_opt_out_pending(incoming.sender_aci, until)
+        await self.signal.send_dm(
+            incoming.sender_aci,
+            self._opt_out_confirm_dm_text(incoming.sender_aci),
+        )
+        if in_group:
+            await self._reply(
+                incoming,
+                self.copy.format_opt_out_group_notice(self._opt_out_confirm_minutes()),
+                True,
+            )
+
+    async def _handle_pending_opt_out_dm(
+        self,
+        incoming: IncomingMessage,
+        user: User,
+        now: int,
+    ) -> bool:
+        if matches_opt_out_confirm(incoming.text, self.settings.bot_name):
+            self.db.opt_out(incoming.sender_aci)
+            await self.signal.send_dm(incoming.sender_aci, self.copy.opted_out)
+            return True
+        intent = commands.parse_intent(
+            incoming.text, mentioned=True, in_dm=True, max_n=self._max_n()
+        )
+        if intent.name == "opt_out":
+            await self._begin_opt_out(incoming, now, in_group=False)
+            return True
+        if intent.name == "yes":
+            self.db.clear_opt_out_pending(incoming.sender_aci)
+            await self.signal.send_dm(incoming.sender_aci, self.copy.opt_out_pending_cancelled)
+            return True
+        self.db.clear_opt_out_pending(incoming.sender_aci)
+        await self.signal.send_dm(incoming.sender_aci, self.copy.opt_out_pending_cancelled)
+        return True
 
 
 def _format_ts(ts: int | None) -> str:

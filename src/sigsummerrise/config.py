@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     bind_host: str = "127.0.0.1"
     bind_port: int = 8000
     magic_token_ttl_seconds: int = 900
+    opt_out_confirm_ttl_seconds: int = 900
     session_ttl_seconds: int = 86400
     dashboard_links_per_hour: int = 3
     llm_calls_per_hour: int = 10

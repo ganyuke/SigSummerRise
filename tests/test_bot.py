@@ -119,7 +119,7 @@ async def test_mention_sends_consent_dm_and_group_notice(tmp_db, settings):
 
 
 @pytest.mark.asyncio
-async def test_unopted_first_mention_notices_then_may_roast(tmp_db, settings, monkeypatch):
+async def test_unopted_group_notices_then_may_roast(tmp_db, settings, monkeypatch):
     monkeypatch.setattr("sigsummerrise.consent.should_roast_unopted_mention", lambda: True)
     signal = FakeSignal()
     bot = Bot(settings, tmp_db, signal)
@@ -138,12 +138,13 @@ async def test_unopted_first_mention_notices_then_may_roast(tmp_db, settings, mo
     await bot.handle(
         _msg(
             sender_aci=aci,
-            text="@grok status",
+            text="@grok what is up",
             mentioned_uuids=[settings.signal_bot_aci],
             timestamp=101,
         )
     )
     assert signal.groups[1][1] in get_responses().group_roasts
+    assert len(signal.dms) == 1
 
 
 @pytest.mark.asyncio
@@ -212,7 +213,7 @@ async def test_dm_non_yes_no_asks_again(tmp_db, settings):
 
 
 @pytest.mark.asyncio
-async def test_dm_no_after_opt_in_deletes(tmp_db, settings):
+async def test_dm_no_after_opt_in_starts_pending_opt_out(tmp_db, settings):
     signal = FakeSignal()
     bot = Bot(settings, tmp_db, signal)
     aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
@@ -221,9 +222,111 @@ async def test_dm_no_after_opt_in_deletes(tmp_db, settings):
     tmp_db.insert_body(aci, 1, "keep me? no")
     await bot.handle(_msg(sender_aci=aci, text="No", group_id=None))
     user = tmp_db.get_user(aci)
+    assert user is not None and user.opted_in
+    assert user.opt_out_pending_until is not None
+    assert tmp_db.count_bodies(aci) == 1
+    assert any("forget" in text.lower() for _, text in signal.dms)
+
+
+@pytest.mark.asyncio
+async def test_group_opt_out_dm_confirms_before_delete(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 1, "secret")
+    await bot.handle(
+        _msg(
+            text="@grok opt out",
+            mentioned_uuids=[settings.signal_bot_aci],
+            sender_aci=aci,
+        )
+    )
+    user = tmp_db.get_user(aci)
+    assert user is not None and user.opted_in
+    assert user.opt_out_pending_until is not None
+    assert tmp_db.count_bodies(aci) >= 1
+    assert any("dm" in text.lower() for _, text in signal.groups)
+    assert any("forget" in text.lower() for _, text in signal.dms)
+
+
+@pytest.mark.asyncio
+async def test_opt_out_confirm_phrase_deletes(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 1, "gone")
+    await bot.handle(_msg(sender_aci=aci, text="opt out", group_id=None))
+    phrase = f"Please forget me, {settings.bot_name}"
+    await bot.handle(_msg(sender_aci=aci, text=phrase, group_id=None))
+    user = tmp_db.get_user(aci)
     assert user is not None and not user.opted_in
     assert tmp_db.count_bodies(aci) == 0
     assert any("deleted" in text.lower() for _, text in signal.dms)
+
+
+@pytest.mark.asyncio
+async def test_opt_out_wrong_phrase_cancels_pending(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    tmp_db.insert_body(aci, 1, "stay")
+    await bot.handle(_msg(sender_aci=aci, text="opt out", group_id=None))
+    await bot.handle(_msg(sender_aci=aci, text="never mind", group_id=None))
+    user = tmp_db.get_user(aci)
+    assert user is not None and user.opted_in
+    assert user.opt_out_pending_until is None
+    assert tmp_db.count_bodies(aci) == 1
+
+
+@pytest.mark.asyncio
+async def test_yes_during_pending_opt_out_cancels(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(_msg(sender_aci=aci, text="opt out", group_id=None))
+    await bot.handle(_msg(sender_aci=aci, text="Yes", group_id=None))
+    user = tmp_db.get_user(aci)
+    assert user is not None and user.opted_in
+    assert user.opt_out_pending_until is None
+
+
+@pytest.mark.asyncio
+async def test_unopted_dm_command_rejection(tmp_db, settings):
+    import time
+
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.decline(aci)
+    tmp_db.set_consent_dm_at(aci, int(time.time()))
+    await bot.handle(_msg(sender_aci=aci, text="dashboard", group_id=None))
+    assert signal.dms[-1][1] == get_responses().unopted_command_rejection
+
+
+@pytest.mark.asyncio
+async def test_opt_back_in_after_opt_out(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.opt_in(aci, 1)
+    await bot.handle(_msg(sender_aci=aci, text="opt out", group_id=None))
+    phrase = f"Please forget me, {settings.bot_name}"
+    await bot.handle(_msg(sender_aci=aci, text=phrase, group_id=None))
+    user = tmp_db.get_user(aci)
+    assert user is not None and user.consent_state == "declined"
+    await bot.handle(_msg(sender_aci=aci, text="Yes", group_id=None))
+    user = tmp_db.get_user(aci)
+    assert user is not None and user.opted_in
 
 
 @pytest.mark.asyncio

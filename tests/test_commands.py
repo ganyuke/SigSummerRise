@@ -66,3 +66,25 @@ def test_dm_yes_no():
 def test_dm_dashboard_without_mention():
     intent = parse_intent("dashboard", mentioned=True, in_dm=True, max_n=200)
     assert intent.name == "dashboard"
+
+
+def test_casual_mentions_are_not_commands():
+    cases = (
+        "I had to opt out of my gym membership",
+        "what's the status of the project",
+        "can you help me with homework",
+        "login to the website from my phone",
+        "check my stats for the week",
+        "don't summarize the past 50 messages in your head",
+    )
+    for text in cases:
+        intent = parse_intent(text, mentioned=True, in_dm=False, max_n=200)
+        assert intent.name == "ask", text
+
+
+def test_opt_out_confirm_phrase():
+    from sigsummerrise.commands import matches_opt_out_confirm
+
+    assert matches_opt_out_confirm("Please forget me, SigSummerRise", "SigSummerRise")
+    assert matches_opt_out_confirm("Please forget me, SigSummerRise!", "SigSummerRise")
+    assert not matches_opt_out_confirm("Please forget me, OtherBot", "SigSummerRise")

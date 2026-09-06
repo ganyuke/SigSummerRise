@@ -14,6 +14,10 @@ _REQUIRED_STRINGS = (
     "opted_in",
     "declined",
     "opted_out",
+    "unopted_command_rejection",
+    "opt_out_group_notice",
+    "opt_out_confirm_dm",
+    "opt_out_pending_cancelled",
     "unopted_group_notice",
     "help_text",
     "llm_fail",
@@ -40,6 +44,10 @@ class Responses:
     opted_in: str
     declined: str
     opted_out: str
+    unopted_command_rejection: str
+    opt_out_group_notice: str
+    opt_out_confirm_dm: str
+    opt_out_pending_cancelled: str
     unopted_group_notice: str
     group_roasts: tuple[str, ...]
     help_text: str
@@ -60,6 +68,18 @@ class Responses:
 
     def format_status(self, count: int, when: str) -> str:
         return self.status_template.format(count=count, when=when)
+
+    def format_opt_out_confirm_dm(self, bot_name: str, count: int, minutes: int) -> str:
+        messages = "message" if count == 1 else "messages"
+        return self.opt_out_confirm_dm.format(
+            bot_name=bot_name,
+            count=count,
+            messages=messages,
+            minutes=minutes,
+        )
+
+    def format_opt_out_group_notice(self, minutes: int) -> str:
+        return self.opt_out_group_notice.format(minutes=minutes)
 
     def pick_group_roast(self) -> str:
         return random.choice(self.group_roasts)
@@ -164,6 +184,10 @@ def load_responses(path: str) -> Responses:
         opted_in=data["opted_in"].strip(),
         declined=data["declined"].strip(),
         opted_out=data["opted_out"].strip(),
+        unopted_command_rejection=data["unopted_command_rejection"].strip(),
+        opt_out_group_notice=data["opt_out_group_notice"].strip(),
+        opt_out_confirm_dm=data["opt_out_confirm_dm"].strip(),
+        opt_out_pending_cancelled=data["opt_out_pending_cancelled"].strip(),
         unopted_group_notice=data["unopted_group_notice"].strip(),
         group_roasts=_require_nonempty_strings(data, "group_roasts"),
         help_text=data["help_text"].strip(),
