@@ -265,7 +265,7 @@ async def test_opt_out_confirm_phrase_deletes(tmp_db, settings):
     user = tmp_db.get_user(aci)
     assert user is not None and not user.opted_in
     assert tmp_db.count_bodies(aci) == 0
-    assert any("deleted" in text.lower() for _, text in signal.dms)
+    assert any("redacted" in text.lower() for _, text in signal.dms)
 
 
 @pytest.mark.asyncio

@@ -151,7 +151,48 @@ def test_draft_cleared_on_set_working_and_clear():
     assert activity.draft_for_viewer("alice") is None
     activity.append_draft("new")
     activity.clear()
+    assert activity.draft_for_viewer("alice") == "new"
+
+
+def test_preview_persists_after_clear_until_dismissed():
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=1,
+    )
+    activity.append_draft("final answer")
+    activity.clear()
+    assert activity.snapshot().state == "idle"
+    assert activity.draft_for_viewer("alice") == "final answer"
+    assert activity.draft_for_viewer("bob") is None
+    activity.dismiss_preview("alice")
     assert activity.draft_for_viewer("alice") is None
+
+
+def test_new_draft_replaces_preview():
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=1,
+    )
+    activity.append_draft("first")
+    activity.clear()
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=2,
+    )
+    assert activity.draft_for_viewer("alice") == "first"
+    activity.append_draft("second")
+    assert activity.draft_for_viewer("alice") == "second"
+    activity.clear()
+    assert activity.draft_for_viewer("alice") == "second"
 
 
 @pytest.mark.asyncio

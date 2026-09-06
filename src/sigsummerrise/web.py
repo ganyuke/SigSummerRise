@@ -345,6 +345,17 @@ def mount_routes(app: FastAPI) -> None:
             headers=_SSE_HEADERS,
         )
 
+    @app.post("/api/live/preview/dismiss")
+    def api_live_preview_dismiss(request: Request) -> JSONResponse:
+        settings: Settings = request.app.state.settings
+        db: Database = request.app.state.db
+        now = int(time.time())
+        aci = session_aci(request, db, settings, now)
+        if aci is None:
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        activity.dismiss_preview(aci)
+        return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
+
     @app.post("/privacy")
     def save_privacy(
         request: Request,

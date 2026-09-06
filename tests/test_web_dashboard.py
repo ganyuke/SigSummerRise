@@ -212,6 +212,32 @@ def test_api_live_draft_only_for_target(tmp_path, settings):
     assert "draft" not in bob_resp
 
 
+def test_api_live_preview_persists_after_clear(tmp_path, settings):
+    from sigsummerrise import activity
+
+    settings = settings.model_copy(update={"bot_name": "TestBot"})
+    client, db = _client(tmp_path, settings)
+    alice = str(uuid.uuid4())
+    db.upsert_user(alice, "Alice")
+    db.opt_in(alice, int(time.time()))
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci=alice,
+        target_display_name="Alice",
+        started_at=int(time.time()),
+    )
+    activity.append_draft("done reply")
+    activity.clear()
+    _login(client, db, settings, alice)
+    resp = client.get("/api/live").json()
+    assert resp.get("draft") == "done reply"
+    dismiss = client.post("/api/live/preview/dismiss")
+    assert dismiss.status_code == 200
+    after = client.get("/api/live").json()
+    assert "draft" not in after
+
+
 async def _async_app_client(tmp_path, settings):
     db = Database(str(tmp_path / "web-stream.db"), settings.db_key)
     db.init()

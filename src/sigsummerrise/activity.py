@@ -34,6 +34,9 @@ _target_aci: str | None = None
 _target_display_name: str | None = None
 _started_at: int | None = None
 _draft_text: str = ""
+_preview_text: str = ""
+_preview_aci: str | None = None
+_preview_dismissed: set[str] = set()
 _snapshot_gen: int = 0
 _draft_gen: int = 0
 _waiters: list[Subscription] = []
@@ -103,16 +106,27 @@ def append_draft(text: str) -> None:
         notify("draft")
 
 
+def dismiss_preview(viewer_aci: str) -> None:
+    if _preview_aci == viewer_aci and _preview_text:
+        _preview_dismissed.add(viewer_aci)
+        notify("snapshot")
+
+
 def draft_for_viewer(viewer_aci: str) -> str | None:
-    if _state != "working" or not _draft_text:
-        return None
-    if _target_aci != viewer_aci:
-        return None
-    return _draft_text
+    if _state == "working" and _target_aci == viewer_aci and _draft_text:
+        return _draft_text
+    if _preview_aci == viewer_aci and _preview_text and viewer_aci not in _preview_dismissed:
+        return _preview_text
+    return None
 
 
 def clear() -> None:
     global _state, _channel, _mode, _target_aci, _target_display_name, _started_at, _draft_text
+    global _preview_text, _preview_aci
+    if _draft_text and _target_aci:
+        _preview_text = _draft_text
+        _preview_aci = _target_aci
+        _preview_dismissed.discard(_target_aci)
     _state = "idle"
     _channel = None
     _mode = None
@@ -136,6 +150,7 @@ def snapshot() -> ActivitySnapshot:
 
 def reset_activity_state() -> None:
     global _state, _channel, _mode, _target_aci, _target_display_name, _started_at, _draft_text
+    global _preview_text, _preview_aci, _preview_dismissed
     global _snapshot_gen, _draft_gen, _waiters
     _state = "idle"
     _channel = None
@@ -144,6 +159,9 @@ def reset_activity_state() -> None:
     _target_display_name = None
     _started_at = None
     _draft_text = ""
+    _preview_text = ""
+    _preview_aci = None
+    _preview_dismissed = set()
     _snapshot_gen = 0
     _draft_gen = 0
     for sub in _waiters:

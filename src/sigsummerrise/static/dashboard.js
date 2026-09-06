@@ -8,7 +8,9 @@
   var statusEl = document.getElementById("bot-status");
   var messageEl = document.getElementById("bot-status-message");
   var draftPanel = document.getElementById("live-draft");
+  var draftTitle = document.getElementById("live-draft-title");
   var draftText = document.getElementById("live-draft-text");
+  var draftDismiss = document.getElementById("live-draft-dismiss");
   var subtitleEl = document.querySelector(".subtitle");
   if (!statusEl || !messageEl) {
     return;
@@ -118,10 +120,36 @@
     if (draft) {
       draftPanel.classList.remove("hidden");
       draftText.textContent = draft;
+      if (draftTitle) {
+        draftTitle.textContent =
+          lastPayload && lastPayload.status.state === "working"
+            ? "Your reply (in progress)"
+            : "Your reply preview";
+      }
     } else {
       draftPanel.classList.add("hidden");
       draftText.textContent = "";
     }
+  }
+
+  function dismissPreview() {
+    fetch("/api/live/preview/dismiss", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+    }).catch(function () {
+      /* ignore transient network errors */
+    });
+    if (draftPanel) {
+      draftPanel.classList.add("hidden");
+    }
+    if (draftText) {
+      draftText.textContent = "";
+    }
+  }
+
+  if (draftDismiss) {
+    draftDismiss.addEventListener("click", dismissPreview);
   }
 
   function updateSubtitle(payload) {
