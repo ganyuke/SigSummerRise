@@ -4,10 +4,11 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-import uvicorn
 from fastapi import FastAPI
+from uvicorn import Config, Server
 
 from sigsummerrise.bot import Bot
+from sigsummerrise import activity
 from sigsummerrise.config import Settings
 from sigsummerrise.db import Database
 from sigsummerrise.responses import init_responses
@@ -16,6 +17,12 @@ from sigsummerrise.web import mount_routes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("sigsummerrise")
+
+
+class SigSummerRiseServer(Server):
+    async def shutdown(self, sockets: list | None = None) -> None:
+        activity.begin_shutdown()
+        await super().shutdown(sockets=sockets)
 
 
 def require_runtime_settings(settings: Settings) -> None:
@@ -38,6 +45,8 @@ def create_app(
         database.init()
         app.state.settings = settings
         app.state.db = database
+        shutdown_event = asyncio.Event()
+        app.state.shutdown_event = shutdown_event
         task = None
         bot = None
         if start_bot:
@@ -47,6 +56,8 @@ def create_app(
         try:
             yield
         finally:
+            activity.begin_shutdown()
+            shutdown_event.set()
             if task is not None:
                 task.cancel()
                 try:
@@ -76,13 +87,15 @@ def main() -> None:
     init_responses(settings.responses_path)
     init_prompts(settings.prompts_path)
     log.info("starting web server on %s:%s", settings.bind_host, settings.bind_port)
-    uvicorn.run(
+    config = Config(
         create_app(settings=settings, start_bot=True),
         host=settings.bind_host,
         port=settings.bind_port,
         log_level="info",
         access_log=False,
+        timeout_graceful_shutdown=1,
     )
+    SigSummerRiseServer(config).run()
 
 
 if __name__ == "__main__":

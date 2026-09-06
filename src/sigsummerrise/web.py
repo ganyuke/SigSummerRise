@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, Literal
 
 import httpx
 from fastapi import FastAPI, Form, Request
@@ -204,14 +205,6 @@ def _live_status_payload(settings: Settings, db: Database, aci: str, now: int) -
     return payload
 
 
-_SSE_HEADERS = {
-    "Cache-Control": "no-store",
-    "X-Accel-Buffering": "no",
-    "Connection": "keep-alive",
-}
-_SSE_HEARTBEAT_SECONDS = 60.0
-
-
 def _format_sse(event: str, data: dict[str, Any]) -> str:
     return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
 
@@ -237,11 +230,70 @@ def _live_activity_payload(settings: Settings, aci: str, now: int) -> dict[str, 
     return payload
 
 
+_SSE_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
+_SSE_HEARTBEAT_SECONDS = 60.0
+_SSE_RECONNECT_DELAY_MS = 5000
+_DISCONNECT_POLL_SECONDS = 0.25
+
+
+def _reconnect_sse() -> str:
+    return _format_sse("reconnect", {"delay_ms": _SSE_RECONNECT_DELAY_MS})
+
+
+async def _watch_disconnect(request: Request, disconnect: asyncio.Event) -> None:
+    while not disconnect.is_set():
+        if await request.is_disconnected():
+            disconnect.set()
+            return
+        await asyncio.sleep(_DISCONNECT_POLL_SECONDS)
+
+
+async def _wait_activity(
+    sub: activity.Subscription,
+    timeout: float,
+    *,
+    disconnect: asyncio.Event | None = None,
+) -> Literal["activity", "shutdown", "heartbeat"]:
+    if activity.is_shutting_down():
+        return "shutdown"
+    sub.event.clear()
+    if disconnect is not None and disconnect.is_set():
+        return "shutdown"
+    activity_task = asyncio.create_task(sub.event.wait())
+    extra: list[asyncio.Task[None]] = []
+    if disconnect is not None:
+        extra.append(asyncio.create_task(disconnect.wait()))
+    tasks = [activity_task, *extra]
+    try:
+        done, _ = await asyncio.wait(set(tasks), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+    if activity.is_shutting_down():
+        return "shutdown"
+    if disconnect is not None and disconnect.is_set():
+        return "shutdown"
+    if activity_task in done:
+        return "activity"
+    return "heartbeat"
+
+
 async def _live_stream(
     settings: Settings,
     db: Database,
     aci: str,
+    *,
+    request: Request | None = None,
 ) -> AsyncIterator[str]:
+    disconnect = asyncio.Event()
+    watcher: asyncio.Task[None] | None = None
+    if request is not None:
+        watcher = asyncio.create_task(_watch_disconnect(request, disconnect))
     sub = activity.subscribe()
     snap_gen = sub.snapshot_gen
     draft_gen = sub.draft_gen
@@ -250,17 +302,31 @@ async def _live_stream(
         snap_gen = activity.snapshot_generation()
         draft_gen = activity.draft_generation()
         yield _format_sse("snapshot", _live_status_payload(settings, db, aci, now))
+        heartbeat_at = time.monotonic()
         while True:
+            if activity.is_shutting_down():
+                yield _reconnect_sse()
+                break
+            if disconnect.is_set():
+                break
             kind = activity.pending_change(snap_gen, draft_gen)
             if kind == "none":
-                sub.event.clear()
-                try:
-                    await asyncio.wait_for(sub.event.wait(), timeout=_SSE_HEARTBEAT_SECONDS)
-                except asyncio.TimeoutError:
-                    yield ": ping\n\n"
-                    continue
-                kind = activity.pending_change(snap_gen, draft_gen)
-                if kind == "none":
+                result = await _wait_activity(
+                    sub,
+                    _DISCONNECT_POLL_SECONDS,
+                    disconnect=disconnect,
+                )
+                if result == "shutdown":
+                    yield _reconnect_sse()
+                    break
+                if result == "activity":
+                    kind = activity.pending_change(snap_gen, draft_gen)
+                    if kind == "none":
+                        continue
+                else:
+                    if time.monotonic() - heartbeat_at >= _SSE_HEARTBEAT_SECONDS:
+                        yield ": ping\n\n"
+                        heartbeat_at = time.monotonic()
                     continue
             now = int(time.time())
             if kind == "snapshot":
@@ -270,7 +336,13 @@ async def _live_stream(
             else:
                 draft_gen = activity.draft_generation()
                 yield _format_sse("update", _live_activity_payload(settings, aci, now))
+    except asyncio.CancelledError:
+        raise
     finally:
+        if watcher is not None:
+            watcher.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watcher
         activity.unsubscribe(sub)
 
 
@@ -340,7 +412,7 @@ def mount_routes(app: FastAPI) -> None:
         if aci is None:
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
         return StreamingResponse(
-            _live_stream(settings, db, aci),
+            _live_stream(settings, db, aci, request=request),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )

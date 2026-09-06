@@ -304,6 +304,28 @@ async def test_live_stream_emits_snapshot_and_draft(tmp_path, settings):
     await bob_stream.aclose()
 
 
+@pytest.mark.asyncio
+async def test_live_stream_exits_on_shutdown(tmp_path, settings):
+    from sigsummerrise import activity
+    from sigsummerrise.web import _live_stream
+
+    settings = settings.model_copy(update={"bot_name": "TestBot"})
+    db = Database(str(tmp_path / "web-stream-shutdown.db"), settings.db_key)
+    db.init()
+    alice = str(uuid.uuid4())
+    db.upsert_user(alice, "Alice")
+    db.opt_in(alice, int(time.time()))
+
+    stream = _live_stream(settings, db, alice)
+    await stream.__anext__()
+    activity.begin_shutdown()
+    second = await stream.__anext__()
+    assert second.startswith("event: reconnect\n")
+    assert "5000" in second
+    with pytest.raises(StopAsyncIteration):
+        await stream.__anext__()
+
+
 def test_merged_members_table(tmp_path, settings):
     client, db = _client(tmp_path, settings)
     alice = str(uuid.uuid4())

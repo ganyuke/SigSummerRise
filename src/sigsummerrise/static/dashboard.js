@@ -2,6 +2,7 @@
   "use strict";
 
   var POLL_MS = 3000;
+  var SSE_RECONNECT_MS = 5000;
   var TICK_MS = 1000;
   var script = document.currentScript;
   var botName = script && script.getAttribute("data-bot-name") ? script.getAttribute("data-bot-name") : "Bot";
@@ -226,6 +227,16 @@
       });
   }
 
+  function scheduleStreamReconnect(delayMs) {
+    if (eventSource) {
+      eventSource.close();
+      eventSource = null;
+    }
+    stopPoll();
+    startPoll();
+    window.setTimeout(connectStream, delayMs || SSE_RECONNECT_MS);
+  }
+
   function connectStream() {
     if (eventSource) {
       return;
@@ -247,13 +258,20 @@
         /* ignore malformed payload */
       }
     });
-    eventSource.onerror = function () {
-      if (eventSource) {
-        eventSource.close();
-        eventSource = null;
+    eventSource.addEventListener("reconnect", function (event) {
+      var delay = SSE_RECONNECT_MS;
+      try {
+        var data = JSON.parse(event.data);
+        if (data.delay_ms) {
+          delay = data.delay_ms;
+        }
+      } catch (e) {
+        /* use default delay */
       }
-      startPoll();
-      window.setTimeout(connectStream, POLL_MS);
+      scheduleStreamReconnect(delay);
+    });
+    eventSource.onerror = function () {
+      scheduleStreamReconnect(POLL_MS);
     };
   }
 

@@ -40,6 +40,17 @@ _preview_dismissed: set[str] = set()
 _snapshot_gen: int = 0
 _draft_gen: int = 0
 _waiters: list[Subscription] = []
+_shutting_down = False
+
+
+def begin_shutdown() -> None:
+    global _shutting_down
+    _shutting_down = True
+    wake_all()
+
+
+def is_shutting_down() -> bool:
+    return _shutting_down
 
 
 def subscribe() -> Subscription:
@@ -50,6 +61,11 @@ def subscribe() -> Subscription:
 
 def unsubscribe(sub: Subscription) -> None:
     _waiters[:] = [w for w in _waiters if w is not sub]
+
+
+def wake_all() -> None:
+    for sub in _waiters:
+        sub.event.set()
 
 
 def snapshot_generation() -> int:
@@ -151,7 +167,7 @@ def snapshot() -> ActivitySnapshot:
 def reset_activity_state() -> None:
     global _state, _channel, _mode, _target_aci, _target_display_name, _started_at, _draft_text
     global _preview_text, _preview_aci, _preview_dismissed
-    global _snapshot_gen, _draft_gen, _waiters
+    global _snapshot_gen, _draft_gen, _waiters, _shutting_down
     _state = "idle"
     _channel = None
     _mode = None
@@ -162,6 +178,7 @@ def reset_activity_state() -> None:
     _preview_text = ""
     _preview_aci = None
     _preview_dismissed = set()
+    _shutting_down = False
     _snapshot_gen = 0
     _draft_gen = 0
     for sub in _waiters:

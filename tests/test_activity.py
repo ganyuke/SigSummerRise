@@ -1,5 +1,7 @@
 import asyncio
 
+import asyncio
+
 import pytest
 
 from sigsummerrise import activity
@@ -231,3 +233,20 @@ async def test_clear_notifies_snapshot():
     await asyncio.wait_for(sub.event.wait(), timeout=1)
     assert activity.pending_change(snap_gen, draft_gen) == "snapshot"
     activity.unsubscribe(sub)
+
+
+def test_begin_shutdown_wakes_waiters():
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=1,
+    )
+    sub = activity.subscribe()
+    sub.event.clear()
+    activity.begin_shutdown()
+    assert activity.is_shutting_down()
+    assert sub.event.is_set()
+    activity.unsubscribe(sub)
+    activity.reset_activity_state()
