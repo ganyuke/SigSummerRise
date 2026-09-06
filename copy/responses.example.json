@@ -1,13 +1,13 @@
 {
   "group_roast_chance": 0.25,
-  "consent_dm": "Reply Yes to opt in.\n\nIf you do, I'll store your non-disappearing group messages in an encrypted database on the host server. I share this text with OpenRouter (Zero Data Retention) only when someone requests a summary or asks me a question.\n\nSummaries and answers are posted in the group for everyone to see.\n\nI never store disappearing messages. You can opt out and delete your data anytime by sending \"opt out\".\n\nReply Yes or No (Y/N works too).",
+  "consent_dm": "Reply Yes to opt in.\n\nIf you do, I'll store your non-disappearing group messages in an encrypted database on the host server. I share this text with OpenRouter (Zero Data Retention) only when someone requests a summary or asks me a question.\n\nSummaries and answers are posted in the group for everyone to see.\n\nI never store disappearing messages. You can opt out to irreversibly redact your data anytime by sending \"opt out\".\n\nReply Yes or No (Y/N works too).",
   "consent_clarify": "Just reply Yes or No.\n• Yes = opt in\n• No = decline\n\nIf you say No now, you can still send Yes later to opt in.",
   "opted_in": "You're in.\n\nIn the group, @mention me to:\n• summarize the past N messages\n• status\n• dashboard (I'll DM a link)\n• opt out\n• ask a question\n\nTo ask a follow-up, just quote-reply my message (no @mention needed). You can also use this DM to talk to me directly for commnands without mentioning me.",
   "declined": "Got it. I won't collect your messages.\n\nSend Yes here anytime if you change your mind.",
-  "opted_out": "Opted out. Your stored messages have been deleted.\n\nReply Yes in this DM to opt back in.",
+  "opted_out": "Opted out. Your stored messages have been irreversibly redacted.\n\nReply Yes in this DM to opt back in.",
   "unopted_command_rejection": "Sorry, I can't do that without your consent.",
   "opt_out_group_notice": "I've DM'd you with instructions to opt out. This process will be automatically cancelled in {minutes} minutes.",
-  "opt_out_confirm_dm": "You have asked to opt out of {bot_name}'s fun summarization and Q&A service. By opting out, I will no longer collect the contents of your messages, redacting both your name and contents of your messages in future summaries.\n\nI will also forget all **{count} {messages}** that I remember from you. **This particular operation is irreversible.**\n\nWould you like to proceed with opting out? Type \"Please forget me, {bot_name}\". This process will be automatically cancelled in {minutes} minutes. It will also be cancelled if you fail to type this phrase correctly; however, you can restart the process by telling me \"opt out\" again.",
+  "opt_out_confirm_dm": "You have asked to opt out of {bot_name}'s fun summarization and Q&A service. By opting out, I will no longer collect the contents of your messages, irreversibly redacting both your name and contents of your messages in future summaries.\n\nI will also forget all **{count} {messages}** that I remember from you. **This particular operation is irreversible.**\n\nWould you like to proceed with opting out? Type \"Please forget me, {bot_name}\". This process will be automatically cancelled in {minutes} minutes. It will also be cancelled if you fail to type this phrase correctly; however, you can restart the process by telling me \"opt out\" again.",
   "opt_out_pending_cancelled": "Opt-out cancelled. You're still opted in.",
   "unopted_group_notice": "You haven't opted in yet, so I can't run commands for you here. Check your DM with me to opt in.",
   "group_roasts": [
@@ -20,7 +20,7 @@
     "Opt in via DM (Yes), then @mention me again.",
     "Not opted in: check your DMs."
   ],
-  "help_text": "@mention me in the group to:\n• summarize the past N messages\n• status: see your stored message count\n• dashboard: get a 1-time login link (expires in 15m)\n• opt out: delete your data\n• ask anything: I'll use recent chat history if relevant\n\nQuote-reply any of my responses to ask a follow-up without an @mention.",
+  "help_text": "@mention me in the group to:\n• summarize the past N messages\n• status: see your stored message count\n• dashboard: get a 1-time login link (expires in 15m)\n• opt out: irreversibly redact your data\n• ask anything: I'll use recent chat history if relevant\n\nQuote-reply any of my responses to ask a follow-up without an @mention.",
   "unknown_replies": [
     "Unknown command. Try asking for help.",
     "Didn't catch that. Type help for commands.",
@@ -51,5 +51,5 @@
   "dashboard_rate": "Too many dashboard link requests. Try again in an hour.",
   "dashboard_group": "Sent a one-time dashboard link to your DM. Valid for 15 minutes.",
   "dashboard_dm": "Your one-time dashboard link (expires in 15 minutes):\n{url}",
-  "status_template": "{count} of your messages are stored. Opted in: {when}.\nSay \"opt out\" to delete them, or \"dashboard\" for a login link."
+  "status_template": "{count} of your messages are stored. Opted in: {when}.\nSay \"opt out\" to irreversibly redact them, or \"dashboard\" for a login link."
 }

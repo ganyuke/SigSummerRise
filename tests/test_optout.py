@@ -28,7 +28,14 @@ def test_opt_out_deletes_only_caller(tmp_db: Database):
     assert tmp_db.get_user(alice).consent_state == "declined"
     assert tmp_db.get_user(bob).opted_in
     holes = tmp_db.connect().execute("SELECT COUNT(*) AS n FROM messages WHERE is_hole = 1").fetchone()
-    assert holes["n"] == 1
+    assert holes["n"] == 2
+    alice_row = tmp_db.connect().execute(
+        "SELECT sender_aci, body, is_hole FROM messages WHERE id = 1"
+    ).fetchone()
+    assert alice_row["sender_aci"] is None
+    assert alice_row["body"] is None
+    assert alice_row["is_hole"] == 1
+    assert tmp_db.get_message_at(alice, 1) is None
     thread = tmp_db.get_thread(sid)
     assert all(entry.sender_aci != alice for entry in thread)
     assert any(entry.sender_aci == bob for entry in thread)

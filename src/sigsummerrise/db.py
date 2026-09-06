@@ -395,12 +395,34 @@ class Database:
     @_serialized
     def opt_out(self, aci: str) -> None:
         conn = self.connect()
-        deleted_ids = {
-            int(row["id"])
-            for row in conn.execute("SELECT id FROM messages WHERE sender_aci = ?", (aci,)).fetchall()
-        }
-        self._redact_summaries_for_message_ids(conn, deleted_ids)
-        conn.execute("DELETE FROM messages WHERE sender_aci = ?", (aci,))
+        aci = aci.strip().lower()
+        rows = conn.execute(
+            """
+            SELECT id, ts FROM messages
+            WHERE sender_aci = ? AND is_hole = 0 AND body IS NOT NULL
+            """,
+            (aci,),
+        ).fetchall()
+        affected_ids = {int(row["id"]) for row in rows}
+        self._redact_summaries_for_message_ids(conn, affected_ids)
+        for row in rows:
+            message_id = int(row["id"])
+            ts = int(row["ts"])
+            existing_hole = conn.execute(
+                "SELECT id FROM messages WHERE ts = ? AND is_hole = 1",
+                (ts,),
+            ).fetchone()
+            if existing_hole is not None:
+                conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+            else:
+                conn.execute(
+                    """
+                    UPDATE messages
+                    SET sender_aci = NULL, body = NULL, is_hole = 1
+                    WHERE id = ?
+                    """,
+                    (message_id,),
+                )
         conn.execute("DELETE FROM threads WHERE sender_aci = ?", (aci,))
         conn.execute("DELETE FROM magic_tokens WHERE user_aci = ?", (aci,))
         conn.execute("DELETE FROM sessions WHERE user_aci = ?", (aci,))
@@ -582,6 +604,61 @@ class Database:
             ids,
         ).fetchall()
         return {row["id"]: _message_from_row(row) for row in rows}
+
+    @_serialized
+    def get_message_at(self, sender_aci: str, ts: int) -> StoredMessage | None:
+        row = self.connect().execute(
+            """
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            FROM messages m
+            LEFT JOIN users u ON u.aci = m.sender_aci
+            WHERE m.sender_aci = ? AND m.ts = ?
+            """,
+            (sender_aci.strip().lower(), ts),
+        ).fetchone()
+        if row is None:
+            return None
+        return _message_from_row(row)
+
+    @_serialized
+    def messages_around(self, center_ts: int, before: int, after: int) -> list[StoredMessage]:
+        conn = self.connect()
+        before_rows = conn.execute(
+            """
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            FROM messages m
+            LEFT JOIN users u ON u.aci = m.sender_aci
+            WHERE m.ts < ?
+            ORDER BY m.ts DESC, m.id DESC
+            LIMIT ?
+            """,
+            (center_ts, before),
+        ).fetchall()
+        center_rows = conn.execute(
+            """
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            FROM messages m
+            LEFT JOIN users u ON u.aci = m.sender_aci
+            WHERE m.ts = ?
+            ORDER BY m.id ASC
+            """,
+            (center_ts,),
+        ).fetchall()
+        after_rows = conn.execute(
+            """
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            FROM messages m
+            LEFT JOIN users u ON u.aci = m.sender_aci
+            WHERE m.ts > ?
+            ORDER BY m.ts ASC, m.id ASC
+            LIMIT ?
+            """,
+            (center_ts, after),
+        ).fetchall()
+        messages = [_message_from_row(row) for row in reversed(before_rows)]
+        messages.extend(_message_from_row(row) for row in center_rows)
+        messages.extend(_message_from_row(row) for row in after_rows)
+        return messages
 
     @_serialized
     def count_bodies(self, aci: str) -> int:
@@ -1090,6 +1167,30 @@ def _summary_from_row(row: Any | None) -> Summary | None:
         summary_text=row["summary_text"],
         kind=kind or "summarize",
     )
+
+
+def merge_message_windows(
+    anchor: list[StoredMessage],
+    recent: list[StoredMessage],
+    max_n: int,
+) -> list[StoredMessage]:
+    if max_n < 1:
+        return []
+    anchor_ids = {message.id for message in anchor}
+    by_id: dict[int, StoredMessage] = {message.id: message for message in anchor}
+    for message in recent:
+        if message.id not in by_id:
+            by_id[message.id] = message
+    merged = sorted(by_id.values(), key=lambda message: (message.ts, message.id))
+    if len(merged) <= max_n:
+        return merged
+    anchor_part = [message for message in merged if message.id in anchor_ids]
+    recent_part = [message for message in merged if message.id not in anchor_ids]
+    while len(anchor_part) + len(recent_part) > max_n and recent_part:
+        recent_part.pop(0)
+    if len(anchor_part) > max_n:
+        return anchor_part[-max_n:]
+    return sorted(anchor_part + recent_part, key=lambda message: (message.ts, message.id))
 
 
 def _message_from_row(row: Any) -> StoredMessage:

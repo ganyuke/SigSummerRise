@@ -13,7 +13,7 @@ from sigsummerrise import activity, auth, collect, commands, consent, health, ll
 from sigsummerrise.activity import Mode
 from sigsummerrise.commands import Intent, help_text, is_command_intent, matches_opt_out_confirm, normalize_command_text
 from sigsummerrise.config import Settings
-from sigsummerrise.db import Database, User
+from sigsummerrise.db import Database, StoredMessage, User, merge_message_windows
 from sigsummerrise.prompts import format_current_time, init_prompts, render_system_prompt
 from sigsummerrise.responses import get_responses, init_responses
 from sigsummerrise.runtime import resolve_llm_config, resolve_prompts
@@ -365,6 +365,47 @@ class Bot:
             return 0
         return min(n, self._max_n())
 
+    def _build_ask_messages(
+        self,
+        incoming: IncomingMessage,
+        *,
+        context_n: int,
+        max_n: int,
+    ) -> tuple[list[StoredMessage], list[StoredMessage] | None, str | None]:
+        recent = self.db.last_n_kept(context_n) if context_n else []
+        anchor_messages: list[StoredMessage] | None = None
+        quote_text_fallback: str | None = None
+        if (
+            incoming.group_id
+            and incoming.quote_timestamp
+            and incoming.quote_author_aci
+            and not self._quote_targets_bot(incoming)
+        ):
+            runtime = self._runtime()
+            quoted_user = self.db.get_user(incoming.quote_author_aci)
+            quoted_opted_in = quoted_user is not None and quoted_user.opted_in
+            center_ts = incoming.quote_timestamp
+            anchor_messages = self.db.messages_around(
+                center_ts,
+                runtime.quote_context_before,
+                runtime.quote_context_after,
+            )
+            quoted = self.db.get_message_at(incoming.quote_author_aci, center_ts)
+            if quoted is not None and quoted.id not in {message.id for message in anchor_messages}:
+                anchor_messages = sorted(
+                    anchor_messages + [quoted],
+                    key=lambda message: (message.ts, message.id),
+                )
+            if not anchor_messages:
+                anchor_messages = None
+                if incoming.quote_text and quoted_opted_in:
+                    quote_text_fallback = incoming.quote_text
+        if anchor_messages:
+            kept = merge_message_windows(anchor_messages, recent, max_n)
+        else:
+            kept = recent
+        return kept, anchor_messages, quote_text_fallback
+
     async def _complete_llm(self, system_template: str, user_block: str, now: int, aci: str) -> str:
         issuance_id = self.db.record_llm_call(aci, now)
         system = self._llm_system(system_template, now)
@@ -395,7 +436,11 @@ class Bot:
             return
         in_group = bool(incoming.group_id)
         context_n = self._ask_context_n() if in_group else 0
-        kept = self.db.last_n_kept(context_n) if context_n else []
+        kept, anchor_messages, quote_text_fallback = self._build_ask_messages(
+            incoming,
+            context_n=context_n,
+            max_n=self._max_n(),
+        )
         ctx = self._llm_ctx()
         hide_acis = self.db.exclude_acis("ask", incoming.sender_aci)
         user_block = collect.format_ask_user_block(
@@ -405,6 +450,8 @@ class Bot:
             in_group=in_group,
             ctx=ctx,
             hide_acis=hide_acis,
+            anchor_messages=anchor_messages,
+            quote_text_fallback=quote_text_fallback,
         )
         group_id = incoming.group_id or self.settings.signal_group_id
         prompts = self._prompts()

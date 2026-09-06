@@ -1,7 +1,7 @@
 import pytest
 
 from sigsummerrise.config import Settings
-from sigsummerrise.db import REDACTED_SUMMARY, Database
+from sigsummerrise.db import REDACTED_SUMMARY, Database, merge_message_windows
 from sigsummerrise.main import require_runtime_settings
 
 
@@ -97,3 +97,59 @@ def test_is_bot_message_ts(tmp_db: Database):
     assert tmp_db.is_bot_message_ts(5001, bot_aci=bot_aci) is False
     assert tmp_db.is_bot_message_ts(5002, bot_aci=bot_aci) is True
     assert tmp_db.is_bot_message_ts(9999, bot_aci=bot_aci, quote_author_aci=bot_aci) is True
+
+
+def test_get_message_at_and_messages_around(tmp_db: Database):
+    alice = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    bob = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(alice, "Alice")
+    tmp_db.upsert_user(bob, "Bob")
+    for ts, aci, body in (
+        (10, alice, "one"),
+        (20, bob, "two"),
+        (30, alice, "anchor"),
+        (40, bob, "four"),
+        (50, alice, "five"),
+    ):
+        tmp_db.insert_body(aci, ts, body)
+    anchor = tmp_db.get_message_at(alice, 30)
+    assert anchor is not None
+    assert anchor.body == "anchor"
+    around = tmp_db.messages_around(30, before=1, after=1)
+    assert [message.body for message in around] == ["two", "anchor", "four"]
+
+
+def test_merge_message_windows_prefers_anchor(tmp_db: Database):
+    alice = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(alice, "Alice")
+    anchor = []
+    recent = []
+    for ts in range(1, 6):
+        msg_id = tmp_db.insert_body(alice, ts, f"m{ts}")
+        message = tmp_db.get_message_at(alice, ts)
+        assert message is not None
+        if ts <= 2:
+            anchor.append(message)
+        recent.append(message)
+    merged = merge_message_windows(anchor, recent, max_n=4)
+    bodies = [message.body for message in merged]
+    assert "m1" in bodies
+    assert "m2" in bodies
+    assert len(merged) == 4
+
+
+def test_opt_out_anonymizes_bodies_to_holes(tmp_db: Database):
+    alice = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(alice, "Alice")
+    tmp_db.opt_in(alice, 1)
+    msg_id = tmp_db.insert_body(alice, 100, "secret")
+    tmp_db.opt_out(alice)
+    row = tmp_db.connect().execute(
+        "SELECT sender_aci, body, is_hole FROM messages WHERE id = ?",
+        (msg_id,),
+    ).fetchone()
+    assert row is not None
+    assert row["sender_aci"] is None
+    assert row["body"] is None
+    assert row["is_hole"] == 1
+    assert tmp_db.count_bodies(alice) == 0

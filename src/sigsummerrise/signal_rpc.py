@@ -32,6 +32,7 @@ class IncomingMessage:
     is_reaction: bool
     has_attachments: bool
     quote_author_aci: str | None = None
+    quote_text: str | None = None
     remote_delete_timestamp: int | None = None
     admin_delete_target_aci: str | None = None
     admin_delete_timestamp: int | None = None
@@ -111,6 +112,8 @@ def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
         or quote.get("quoteAuthor")
     )
     quote_author_aci = str(quote_author_raw).strip().lower() if quote_author_raw else None
+    quote_body = quote.get("text") or quote.get("message")
+    quote_text = str(quote_body).strip() if quote_body else None
     expires = data.get("expiresInSeconds")
     if expires is None:
         expires = data.get("expireTimer") or 0
@@ -155,6 +158,7 @@ def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
         mentioned_uuids=mentions,
         quote_timestamp=int(quote_ts) if quote_ts else None,
         quote_author_aci=quote_author_aci,
+        quote_text=quote_text,
         is_reaction=is_reaction,
         has_attachments=bool(attachments),
         remote_delete_timestamp=remote_delete_ts,

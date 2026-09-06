@@ -28,6 +28,8 @@ class ResolvedLlmConfig:
     llm_calls_per_hour: int
     llm_queue_cap: int
     ask_context_n: int
+    quote_context_before: int
+    quote_context_after: int
     max_n: int
     api_key_configured: bool
     api_key_suffix: str | None
@@ -67,6 +69,12 @@ def resolve_llm_config(settings: Settings, db: Database) -> ResolvedLlmConfig:
         llm_calls_per_hour=int(data.get("llm_calls_per_hour") or settings.llm_calls_per_hour),
         llm_queue_cap=int(data.get("llm_queue_cap") if data.get("llm_queue_cap") is not None else settings.llm_queue_cap),
         ask_context_n=int(data.get("ask_context_n") or settings.ask_context_n),
+        quote_context_before=int(
+            data.get("quote_context_before") or settings.quote_context_before
+        ),
+        quote_context_after=int(
+            data.get("quote_context_after") or settings.quote_context_after
+        ),
         max_n=int(data.get("max_n") or settings.max_n),
         api_key_configured=bool(api_key),
         api_key_suffix=suffix,

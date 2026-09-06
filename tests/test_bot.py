@@ -990,3 +990,95 @@ async def test_ask_hides_excluded_member_from_other_requester(tmp_db, settings, 
         )
     )
     assert "alice pizza" in captured[0]
+
+
+def test_build_ask_messages_skips_quote_text_when_author_unknown(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    asker = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    quoted = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(asker, "Suisei")
+    tmp_db.opt_in(asker, 1)
+    incoming = _msg(
+        text="@grok explain",
+        mentioned_uuids=[settings.signal_bot_aci],
+        quote_timestamp=5000,
+        quote_author_aci=quoted,
+        quote_text="leaked-inline-quote",
+        timestamp=5001,
+    )
+    _, _, fallback = bot._build_ask_messages(incoming, context_n=10, max_n=50)
+    assert fallback is None
+
+
+def test_build_ask_messages_skips_quote_text_when_author_not_opted_in(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    asker = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    quoted = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(asker, "Suisei")
+    tmp_db.upsert_user(quoted, "Bob")
+    tmp_db.opt_in(asker, 1)
+    tmp_db.opt_in(quoted, 1)
+    tmp_db.opt_out(quoted)
+    incoming = _msg(
+        text="@grok explain",
+        mentioned_uuids=[settings.signal_bot_aci],
+        quote_timestamp=5000,
+        quote_author_aci=quoted,
+        quote_text="leaked-inline-quote",
+        timestamp=5001,
+    )
+    _, _, fallback = bot._build_ask_messages(incoming, context_n=10, max_n=50)
+    assert fallback is None
+
+
+def test_build_ask_messages_uses_quote_text_when_author_opted_in(tmp_db, settings):
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    asker = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    quoted = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(asker, "Suisei")
+    tmp_db.upsert_user(quoted, "Bob")
+    tmp_db.opt_in(asker, 1)
+    tmp_db.opt_in(quoted, 1)
+    incoming = _msg(
+        text="@grok explain",
+        mentioned_uuids=[settings.signal_bot_aci],
+        quote_timestamp=5000,
+        quote_author_aci=quoted,
+        quote_text="stored-only-in-signal",
+        timestamp=5001,
+    )
+    _, _, fallback = bot._build_ask_messages(incoming, context_n=10, max_n=50)
+    assert fallback == "stored-only-in-signal"
+
+
+@pytest.mark.asyncio
+async def test_ask_does_not_send_inline_quote_for_unknown_author(tmp_db, settings, monkeypatch):
+    captured: list[str] = []
+
+    async def fake_complete(settings, db, system, user, **kwargs):
+        captured.append(user)
+        return "answer"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    asker = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    quoted = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    tmp_db.upsert_user(asker, "Suisei")
+    tmp_db.opt_in(asker, 1)
+    await bot.handle(
+        _msg(
+            text="@grok explain",
+            mentioned_uuids=[settings.signal_bot_aci],
+            quote_timestamp=5000,
+            quote_author_aci=quoted,
+            quote_text="leaked-inline-quote",
+            timestamp=5001,
+        )
+    )
+    assert captured
+    assert "leaked-inline-quote" not in captured[0]
+    assert "Quoted message (not stored)" not in captured[0]

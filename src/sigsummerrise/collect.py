@@ -185,9 +185,22 @@ def format_ask_user_block(
     in_group: bool,
     ctx: LlmFormatContext,
     hide_acis: frozenset[str] | None = None,
+    anchor_messages: list[StoredMessage] | None = None,
+    quote_text_fallback: str | None = None,
 ) -> str:
     channel = "group chat" if in_group else "private DM"
     header = [f"Channel: {channel}", f"Asked by: {_display_name(asker_name)}"]
+    if anchor_messages:
+        anchor_preamble = format_transcript_preamble(
+            anchor_messages,
+            ctx=ctx,
+            task_line=f"Quoted context ({len(anchor_messages)} kept messages):",
+            hide_acis=hide_acis,
+        )
+        header.append(anchor_preamble)
+        header.append("\n".join(format_window(anchor_messages, ctx=ctx, hide_acis=hide_acis)))
+    elif quote_text_fallback:
+        header.append(f"Quoted message (not stored):\n{quote_text_fallback}")
     if messages:
         preamble = format_transcript_preamble(
             messages,
