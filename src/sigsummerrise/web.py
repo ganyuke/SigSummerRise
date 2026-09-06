@@ -257,16 +257,21 @@ async def _wait_activity(
     timeout: float,
     *,
     disconnect: asyncio.Event | None = None,
+    shutdown_event: asyncio.Event | None = None,
 ) -> Literal["activity", "shutdown", "heartbeat"]:
     if activity.is_shutting_down():
         return "shutdown"
     sub.event.clear()
     if disconnect is not None and disconnect.is_set():
         return "shutdown"
+    if shutdown_event is not None and shutdown_event.is_set():
+        return "shutdown"
     activity_task = asyncio.create_task(sub.event.wait())
     extra: list[asyncio.Task[None]] = []
     if disconnect is not None:
         extra.append(asyncio.create_task(disconnect.wait()))
+    if shutdown_event is not None:
+        extra.append(asyncio.create_task(shutdown_event.wait()))
     tasks = [activity_task, *extra]
     try:
         done, _ = await asyncio.wait(set(tasks), timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
@@ -278,10 +283,11 @@ async def _wait_activity(
         return "shutdown"
     if disconnect is not None and disconnect.is_set():
         return "shutdown"
+    if shutdown_event is not None and shutdown_event.is_set():
+        return "shutdown"
     if activity_task in done:
         return "activity"
     return "heartbeat"
-
 
 async def _live_stream(
     settings: Settings,
@@ -289,45 +295,56 @@ async def _live_stream(
     aci: str,
     *,
     request: Request | None = None,
+    shutdown_event: asyncio.Event,  # Inject global shutdown_event
 ) -> AsyncIterator[str]:
     disconnect = asyncio.Event()
     watcher: asyncio.Task[None] | None = None
     if request is not None:
         watcher = asyncio.create_task(_watch_disconnect(request, disconnect))
+    
     sub = activity.subscribe()
     snap_gen = sub.snapshot_gen
     draft_gen = sub.draft_gen
+    
     try:
         now = int(time.time())
         snap_gen = activity.snapshot_generation()
         draft_gen = activity.draft_generation()
         yield _format_sse("snapshot", _live_status_payload(settings, db, aci, now))
+        
         heartbeat_at = time.monotonic()
+        
         while True:
-            if activity.is_shutting_down():
+            if shutdown_event.is_set() or activity.is_shutting_down():
                 yield _reconnect_sse()
                 break
             if disconnect.is_set():
                 break
+
             kind = activity.pending_change(snap_gen, draft_gen)
             if kind == "none":
                 result = await _wait_activity(
                     sub,
-                    _DISCONNECT_POLL_SECONDS,
+                    timeout=_SSE_HEARTBEAT_SECONDS,  # Set timeout to heartbeat interval directly
                     disconnect=disconnect,
+                    shutdown_event=shutdown_event,
                 )
+
                 if result == "shutdown":
                     yield _reconnect_sse()
+                    break
+                if result == "disconnect":
                     break
                 if result == "activity":
                     kind = activity.pending_change(snap_gen, draft_gen)
                     if kind == "none":
                         continue
-                else:
+                else:  # timeout
                     if time.monotonic() - heartbeat_at >= _SSE_HEARTBEAT_SECONDS:
                         yield ": ping\n\n"
                         heartbeat_at = time.monotonic()
                     continue
+
             now = int(time.time())
             if kind == "snapshot":
                 snap_gen = activity.snapshot_generation()
@@ -336,6 +353,7 @@ async def _live_stream(
             else:
                 draft_gen = activity.draft_generation()
                 yield _format_sse("update", _live_activity_payload(settings, aci, now))
+
     except asyncio.CancelledError:
         raise
     finally:
@@ -344,7 +362,6 @@ async def _live_stream(
             with contextlib.suppress(asyncio.CancelledError):
                 await watcher
         activity.unsubscribe(sub)
-
 
 def mount_routes(app: FastAPI) -> None:
     jinja = _env()
@@ -407,12 +424,21 @@ def mount_routes(app: FastAPI) -> None:
     async def api_live_stream(request: Request):
         settings: Settings = request.app.state.settings
         db: Database = request.app.state.db
+        shutdown_event: asyncio.Event = request.app.state.shutdown_event
+
         now = int(time.time())
         aci = session_aci(request, db, settings, now)
         if aci is None:
             return JSONResponse({"detail": "unauthorized"}, status_code=401)
+
         return StreamingResponse(
-            _live_stream(settings, db, aci, request=request),
+            _live_stream(
+                settings,
+                db,
+                aci,
+                request=request,
+                shutdown_event=shutdown_event,
+            ),
             media_type="text/event-stream",
             headers=_SSE_HEADERS,
         )
