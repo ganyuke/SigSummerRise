@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 Channel = Literal["group", "dm"]
 Mode = Literal["ask", "summarize", "follow_up"]
 State = Literal["idle", "working"]
+ChangeKind = Literal["snapshot", "draft"]
 
 
 @dataclass(frozen=True)
@@ -18,6 +20,13 @@ class ActivitySnapshot:
     started_at: int | None = None
 
 
+@dataclass(frozen=True)
+class Subscription:
+    event: asyncio.Event
+    snapshot_gen: int
+    draft_gen: int
+
+
 _state: State = "idle"
 _channel: Channel | None = None
 _mode: Mode | None = None
@@ -25,6 +34,47 @@ _target_aci: str | None = None
 _target_display_name: str | None = None
 _started_at: int | None = None
 _draft_text: str = ""
+_snapshot_gen: int = 0
+_draft_gen: int = 0
+_waiters: list[Subscription] = []
+
+
+def subscribe() -> Subscription:
+    sub = Subscription(asyncio.Event(), _snapshot_gen, _draft_gen)
+    _waiters.append(sub)
+    return sub
+
+
+def unsubscribe(sub: Subscription) -> None:
+    _waiters[:] = [w for w in _waiters if w is not sub]
+
+
+def snapshot_generation() -> int:
+    return _snapshot_gen
+
+
+def draft_generation() -> int:
+    return _draft_gen
+
+
+def pending_change(since_snapshot: int, since_draft: int) -> ChangeKind | Literal["none"]:
+    if _snapshot_gen != since_snapshot:
+        return "snapshot"
+    if _draft_gen != since_draft:
+        return "draft"
+    return "none"
+
+
+def notify(kind: ChangeKind) -> None:
+    global _snapshot_gen, _draft_gen
+    if kind == "snapshot":
+        _snapshot_gen += 1
+    else:
+        _draft_gen += 1
+    if not _waiters:
+        return
+    for sub in _waiters:
+        sub.event.set()
 
 
 def set_working(
@@ -43,12 +93,14 @@ def set_working(
     _target_display_name = target_display_name
     _started_at = started_at
     _draft_text = ""
+    notify("snapshot")
 
 
 def append_draft(text: str) -> None:
     global _draft_text
     if text:
         _draft_text += text
+        notify("draft")
 
 
 def draft_for_viewer(viewer_aci: str) -> str | None:
@@ -68,6 +120,7 @@ def clear() -> None:
     _target_display_name = None
     _started_at = None
     _draft_text = ""
+    notify("snapshot")
 
 
 def snapshot() -> ActivitySnapshot:
@@ -82,7 +135,20 @@ def snapshot() -> ActivitySnapshot:
 
 
 def reset_activity_state() -> None:
-    clear()
+    global _state, _channel, _mode, _target_aci, _target_display_name, _started_at, _draft_text
+    global _snapshot_gen, _draft_gen, _waiters
+    _state = "idle"
+    _channel = None
+    _mode = None
+    _target_aci = None
+    _target_display_name = None
+    _started_at = None
+    _draft_text = ""
+    _snapshot_gen = 0
+    _draft_gen = 0
+    for sub in _waiters:
+        sub.event.set()
+    _waiters.clear()
 
 
 def format_elapsed(seconds: int) -> str:

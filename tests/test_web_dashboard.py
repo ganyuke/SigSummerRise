@@ -3,10 +3,20 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from sigsummerrise.config import Settings
 from sigsummerrise.db import Database
 from sigsummerrise.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _reset_activity():
+    from sigsummerrise import activity
+
+    activity.reset_activity_state()
+    yield
+    activity.reset_activity_state()
 
 
 def _client(tmp_path, settings):
@@ -200,6 +210,72 @@ def test_api_live_draft_only_for_target(tmp_path, settings):
     _login(client, db, settings, bob)
     bob_resp = client.get("/api/live").json()
     assert "draft" not in bob_resp
+
+
+async def _async_app_client(tmp_path, settings):
+    db = Database(str(tmp_path / "web-stream.db"), settings.db_key)
+    db.init()
+    app = create_app(settings=settings, db=db, start_bot=False)
+    transport = ASGITransport(app=app)
+    client = AsyncClient(transport=transport, base_url="http://testserver")
+    return client, db, app
+
+
+@pytest.mark.asyncio
+async def test_api_live_stream_unauthenticated(tmp_path, settings):
+    client, db, _app = await _async_app_client(tmp_path, settings)
+    try:
+        aci = str(uuid.uuid4())
+        db.upsert_user(aci, "Suisei")
+        db.opt_in(aci, int(time.time()))
+        response = await client.get("/api/live/stream")
+        assert response.status_code == 401
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_live_stream_emits_snapshot_and_draft(tmp_path, settings):
+    from sigsummerrise import activity
+    from sigsummerrise.web import _live_stream
+
+    settings = settings.model_copy(update={"bot_name": "TestBot"})
+    db = Database(str(tmp_path / "web-stream-gen.db"), settings.db_key)
+    db.init()
+    alice = str(uuid.uuid4())
+    bob = str(uuid.uuid4())
+    db.upsert_user(alice, "Alice")
+    db.upsert_user(bob, "Bob")
+    db.opt_in(alice, int(time.time()))
+    db.opt_in(bob, int(time.time()))
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci=alice,
+        target_display_name="Alice",
+        started_at=int(time.time()),
+    )
+
+    stream = _live_stream(settings, db, alice)
+    first = await stream.__anext__()
+    assert first.startswith("event: snapshot\n")
+    assert "TestBot" in first
+
+    activity.append_draft("live token")
+    second = await stream.__anext__()
+    assert second.startswith("event: update\n")
+    assert "live token" in second
+
+    await stream.aclose()
+
+    bob_stream = _live_stream(settings, db, bob)
+    bob_first = await bob_stream.__anext__()
+    assert "event: snapshot" in bob_first
+    activity.append_draft(" more")
+    bob_second = await bob_stream.__anext__()
+    assert bob_second.startswith("event: update\n")
+    assert "draft" not in bob_second
+    await bob_stream.aclose()
 
 
 def test_merged_members_table(tmp_path, settings):

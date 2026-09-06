@@ -137,6 +137,7 @@ class Bot:
         )
         if intent.name == "yes":
             self.db.opt_in(incoming.sender_aci, now)
+            activity.notify("snapshot")
             await self.signal.send_dm(incoming.sender_aci, self.copy.opted_in)
             return
         if intent.name == "no":
@@ -166,6 +167,7 @@ class Bot:
         )
         if action == "body":
             self.db.insert_body(incoming.sender_aci, incoming.timestamp, incoming.text.strip())
+            activity.notify("snapshot")
         elif action == "hole":
             self.db.insert_hole(incoming.timestamp)
 
@@ -624,6 +626,7 @@ class Bot:
     ) -> bool:
         if matches_opt_out_confirm(incoming.text, self.settings.bot_name):
             self.db.opt_out(incoming.sender_aci)
+            activity.notify("snapshot")
             await self.signal.send_dm(incoming.sender_aci, self.copy.opted_out)
             return True
         intent = commands.parse_intent(

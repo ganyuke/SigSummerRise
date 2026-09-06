@@ -11,6 +11,7 @@ import httpx
 
 from sigsummerrise.config import Settings
 from sigsummerrise.db import Database
+from sigsummerrise import activity
 from sigsummerrise.runtime import ResolvedLlmConfig, resolve_llm_config
 
 log = logging.getLogger("sigsummerrise.llm")
@@ -211,3 +212,4 @@ async def complete(
                 completion_tokens=completion_t,
                 cost_usd=cost,
             )
+            activity.notify("snapshot")

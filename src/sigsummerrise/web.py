@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -202,6 +204,76 @@ def _live_status_payload(settings: Settings, db: Database, aci: str, now: int) -
     return payload
 
 
+_SSE_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Accel-Buffering": "no",
+    "Connection": "keep-alive",
+}
+_SSE_HEARTBEAT_SECONDS = 60.0
+
+
+def _format_sse(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, separators=(',', ':'))}\n\n"
+
+
+def _live_activity_payload(settings: Settings, aci: str, now: int) -> dict[str, Any]:
+    snap = activity.snapshot()
+    message, elapsed = activity.format_status_message(
+        bot_name=settings.bot_name,
+        viewer_aci=aci,
+        snap=snap,
+        now=now,
+    )
+    payload: dict[str, Any] = {
+        "status": {
+            "state": snap.state,
+            "message": message,
+            "elapsed_seconds": elapsed,
+        },
+    }
+    draft = activity.draft_for_viewer(aci)
+    if draft:
+        payload["draft"] = draft
+    return payload
+
+
+async def _live_stream(
+    settings: Settings,
+    db: Database,
+    aci: str,
+) -> AsyncIterator[str]:
+    sub = activity.subscribe()
+    snap_gen = sub.snapshot_gen
+    draft_gen = sub.draft_gen
+    try:
+        now = int(time.time())
+        snap_gen = activity.snapshot_generation()
+        draft_gen = activity.draft_generation()
+        yield _format_sse("snapshot", _live_status_payload(settings, db, aci, now))
+        while True:
+            kind = activity.pending_change(snap_gen, draft_gen)
+            if kind == "none":
+                sub.event.clear()
+                try:
+                    await asyncio.wait_for(sub.event.wait(), timeout=_SSE_HEARTBEAT_SECONDS)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+                    continue
+                kind = activity.pending_change(snap_gen, draft_gen)
+                if kind == "none":
+                    continue
+            now = int(time.time())
+            if kind == "snapshot":
+                snap_gen = activity.snapshot_generation()
+                draft_gen = activity.draft_generation()
+                yield _format_sse("snapshot", _live_status_payload(settings, db, aci, now))
+            else:
+                draft_gen = activity.draft_generation()
+                yield _format_sse("update", _live_activity_payload(settings, aci, now))
+    finally:
+        activity.unsubscribe(sub)
+
+
 def mount_routes(app: FastAPI) -> None:
     jinja = _env()
     app.mount("/static", StaticFiles(directory=str(static_dir())), name="static")
@@ -259,6 +331,20 @@ def mount_routes(app: FastAPI) -> None:
         payload = _live_status_payload(settings, db, aci, now)
         return JSONResponse(payload, headers={"Cache-Control": "no-store"})
 
+    @app.get("/api/live/stream")
+    async def api_live_stream(request: Request):
+        settings: Settings = request.app.state.settings
+        db: Database = request.app.state.db
+        now = int(time.time())
+        aci = session_aci(request, db, settings, now)
+        if aci is None:
+            return JSONResponse({"detail": "unauthorized"}, status_code=401)
+        return StreamingResponse(
+            _live_stream(settings, db, aci),
+            media_type="text/event-stream",
+            headers=_SSE_HEADERS,
+        )
+
     @app.post("/privacy")
     def save_privacy(
         request: Request,
@@ -287,6 +373,7 @@ def mount_routes(app: FastAPI) -> None:
         if aci is None:
             return RedirectResponse("/", status_code=302)
         db.opt_out(aci)
+        activity.notify("snapshot")
         response = RedirectResponse("/", status_code=302)
         auth.revoke_session(request, db, settings)
         auth.clear_session_cookie(response, settings)
@@ -381,6 +468,7 @@ def mount_routes(app: FastAPI) -> None:
             return HTMLResponse("Not found", status_code=404)
         if action == "reset_prompts":
             save_runtime_config(db, {}, clear_prompts=True)
+            activity.notify("snapshot")
             return _render_ops(request, jinja, flash_ok="Prompts reset to file defaults.")
         patch: dict[str, Any] = {
             "openrouter_model": openrouter_model.strip(),
@@ -414,6 +502,7 @@ def mount_routes(app: FastAPI) -> None:
         try:
             validate_prompt_fields(patch)
             save_runtime_config(db, patch)
+            activity.notify("snapshot")
         except ValueError as exc:
             return _render_ops(request, jinja, flash_err=str(exc))
         return _render_ops(request, jinja, flash_ok="Saved.")

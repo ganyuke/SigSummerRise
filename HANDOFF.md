@@ -67,7 +67,7 @@ Group/DM  →  signal-cli (JSON-RPC + SSE)  →  sigsummerrise
 3. **Magic links only in DMs.** Posting `/a/{token}` in the group lets anyone burn the one-time token.
 4. **A user can only mutate their own data.** Opt-out/status/dashboard-link issuance/**privacy flags** are caller-scoped. Summarize **reads** all kept messages but cannot delete others.
 5. **No bodies, tokens, or OpenRouter prompts in journald/stdout.** Caddy must not log `/a/` tokens or query strings (`deploy/Caddyfile.example`). The app disables uvicorn access logs so tokens never hit the unit journal.
-6. **No third-party JS/fonts/CDNs** on the dashboard (would phone home for every viewer). Self-hosted `static/dashboard.js` for live polling is OK.
+6. **No third-party JS/fonts/CDNs** on the dashboard (would phone home for every viewer). Self-hosted `static/dashboard.js` for live SSE (with `/api/live` poll fallback) is OK.
 7. **OpenRouter plugins/tools are off.** They sit outside ZDR.
 8. **Fail closed** if the model has no ZDR endpoint: in-group error **without** echoing the prompt.
 9. **Group commands require a Signal mention of the bot ACI.** Plain-text `@username` is not a mention.
@@ -137,7 +137,7 @@ The cookie value is random, not an ACI.
 
 ## Dashboard
 
-Magic-link members (`/`): consent stats, model name, last successful OpenRouter provider, per-member message counts, LLM usage (24h/7d), estimated spend (7d), weekly rank, **single members table** (opted-in first; not-opted-in rows show red **not opted-in** status and em dashes for numeric columns), personal hourly quota, **privacy controls** (exclude self from others’ summarize/ask windows; collection unchanged), **dashboard opt-out** (same delete as Signal `opt out`), live bot status, **live draft preview for the user being answered** (streaming LLM text; never shown to other members), FAQ. Stats and status refresh via self-hosted `GET /api/live` polling (session required); DM activity shows as a privacy-aware busy reply to other members (only the recipient sees “reply to you”). **No** per-user last-seen, **no** UUIDs, **no** phones, **no** message bodies. Logged-out visitors see none of the above.
+Magic-link members (`/`): consent stats, model name, last successful OpenRouter provider, per-member message counts, LLM usage (24h/7d), estimated spend (7d), weekly rank, **single members table** (opted-in first; not-opted-in rows show red **not opted-in** status and em dashes for numeric columns), personal hourly quota, **privacy controls** (exclude self from others’ summarize/ask windows; collection unchanged), **dashboard opt-out** (same delete as Signal `opt out`), live bot status, **live draft preview for the user being answered** (streaming LLM text; never shown to other members), FAQ. Stats and status refresh via self-hosted SSE (`GET /api/live/stream`, 60s heartbeat) with `GET /api/live` poll fallback (session required); DM activity shows as a privacy-aware busy reply to other members (only the recipient sees “reply to you”). **No** per-user last-seen, **no** UUIDs, **no** phones, **no** message bodies. Logged-out visitors see none of the above.
 
 **Privacy flags (dashboard only):** `exclude_from_summaries` / `exclude_from_questions` on `users`. Messages stay stored; at LLM format time the requester’s window redacts opted-in members who set the matching flag (unlabeled `[redacted]`). The requester always sees their own lines. Summaries store `kind` (`summarize` | `ask`) so follow-ups use the right flag. Opt-out clears flags and deletes bodies.
 

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from sigsummerrise import activity
@@ -150,3 +152,41 @@ def test_draft_cleared_on_set_working_and_clear():
     activity.append_draft("new")
     activity.clear()
     assert activity.draft_for_viewer("alice") is None
+
+
+@pytest.mark.asyncio
+async def test_append_draft_notifies_draft():
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=1,
+    )
+    sub = activity.subscribe()
+    snap_gen = activity.snapshot_generation()
+    draft_gen = activity.draft_generation()
+    sub.event.clear()
+    activity.append_draft("x")
+    await asyncio.wait_for(sub.event.wait(), timeout=1)
+    assert activity.pending_change(snap_gen, draft_gen) == "draft"
+    activity.unsubscribe(sub)
+
+
+@pytest.mark.asyncio
+async def test_clear_notifies_snapshot():
+    activity.set_working(
+        channel="group",
+        mode="ask",
+        target_aci="alice",
+        target_display_name="Alice",
+        started_at=1,
+    )
+    sub = activity.subscribe()
+    snap_gen = activity.snapshot_generation()
+    draft_gen = activity.draft_generation()
+    sub.event.clear()
+    activity.clear()
+    await asyncio.wait_for(sub.event.wait(), timeout=1)
+    assert activity.pending_change(snap_gen, draft_gen) == "snapshot"
+    activity.unsubscribe(sub)

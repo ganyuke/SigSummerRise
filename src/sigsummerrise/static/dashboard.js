@@ -16,6 +16,7 @@
 
   var pollTimer = null;
   var tickTimer = null;
+  var eventSource = null;
   var lastPayload = null;
   var elapsedBase = null;
   var elapsedAt = null;
@@ -138,13 +139,43 @@
     }
   }
 
+  function applySnapshot(payload) {
+    setStatus(payload);
+    updateSubtitle(payload);
+    updateDraft(payload.draft || null);
+    updateStats(payload.stats);
+    updateQuota(payload.quota);
+    updateMembers(payload.members);
+  }
+
+  function applyUpdate(payload) {
+    setStatus(payload);
+    updateDraft(payload.draft || null);
+  }
+
+  function stopPoll() {
+    if (pollTimer) {
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function startPoll() {
+    if (pollTimer) {
+      return;
+    }
+    poll();
+    pollTimer = window.setInterval(poll, POLL_MS);
+  }
+
   function poll() {
     fetch("/api/live", { credentials: "same-origin", cache: "no-store" })
       .then(function (response) {
         if (response.status === 401) {
-          if (pollTimer) {
-            window.clearInterval(pollTimer);
-            pollTimer = null;
+          stopPoll();
+          if (eventSource) {
+            eventSource.close();
+            eventSource = null;
           }
           messageEl.textContent = botName + " is awaiting messages.";
           statusEl.classList.remove("status-working");
@@ -160,18 +191,43 @@
         if (!payload) {
           return;
         }
-        setStatus(payload);
-        updateSubtitle(payload);
-        updateDraft(payload.draft || null);
-        updateStats(payload.stats);
-        updateQuota(payload.quota);
-        updateMembers(payload.members);
+        applySnapshot(payload);
       })
       .catch(function () {
         /* ignore transient network errors */
       });
   }
 
-  poll();
-  pollTimer = window.setInterval(poll, POLL_MS);
+  function connectStream() {
+    if (eventSource) {
+      return;
+    }
+    eventSource = new EventSource("/api/live/stream");
+    eventSource.addEventListener("snapshot", function (event) {
+      stopPoll();
+      try {
+        applySnapshot(JSON.parse(event.data));
+      } catch (e) {
+        /* ignore malformed payload */
+      }
+    });
+    eventSource.addEventListener("update", function (event) {
+      stopPoll();
+      try {
+        applyUpdate(JSON.parse(event.data));
+      } catch (e) {
+        /* ignore malformed payload */
+      }
+    });
+    eventSource.onerror = function () {
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
+      startPoll();
+      window.setTimeout(connectStream, POLL_MS);
+    };
+  }
+
+  connectStream();
 })();
