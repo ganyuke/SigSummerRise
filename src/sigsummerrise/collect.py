@@ -115,13 +115,51 @@ def format_line(
     return f"{stamp}{_display_name(message.display_name)}: {body}"
 
 
+def _flush_redacted_run(run: list[int | None], ctx: LlmFormatContext) -> list[str]:
+    """Render a run of consecutive redacted messages as one line.
+
+    A single redacted message keeps the original per-line format; runs of
+    two or more collapse into a timestamped range line. Entries without a
+    timestamp (window ids missing from the store) render as an unstampeded
+    count when grouped.
+    """
+    if not run:
+        return []
+    if len(run) == 1:
+        ts = run[0]
+        if ts:
+            return [f"[{format_message_timestamp(ts, ctx.tz_name)}] [redacted]"]
+        return ["[redacted]"]
+    known = [ts for ts in run if ts]
+    if known:
+        first = format_message_timestamp(min(known), ctx.tz_name)
+        last = format_message_timestamp(max(known), ctx.tz_name)
+        if last[:10] == first[:10]:
+            last = last[11:]
+        span = f"[{first} → {last}] "
+    else:
+        span = ""
+    return [f"{span}({len(run)} redacted messages)"]
+
+
 def format_window(
     messages: list[StoredMessage],
     *,
     ctx: LlmFormatContext | None = None,
     hide_acis: frozenset[str] | None = None,
 ) -> list[str]:
-    return [format_line(message, ctx=ctx, hide_acis=hide_acis) for message in messages]
+    ctx = ctx or LlmFormatContext()
+    lines: list[str] = []
+    run: list[int | None] = []
+    for message in messages:
+        if _is_redacted(message, hide_acis=hide_acis):
+            run.append(message.ts or None)
+            continue
+        lines.extend(_flush_redacted_run(run, ctx))
+        run = []
+        lines.append(format_line(message, ctx=ctx, hide_acis=hide_acis))
+    lines.extend(_flush_redacted_run(run, ctx))
+    return lines
 
 
 def format_window_from_ids(
@@ -133,12 +171,19 @@ def format_window_from_ids(
 ) -> list[str]:
     ctx = ctx or LlmFormatContext()
     lines: list[str] = []
+    run: list[int | None] = []
     for message_id in ids:
         message = by_id.get(message_id)
         if message is None:
-            lines.append("[redacted]")
-        else:
-            lines.append(format_line(message, ctx=ctx, hide_acis=hide_acis))
+            run.append(None)
+            continue
+        if _is_redacted(message, hide_acis=hide_acis):
+            run.append(message.ts or None)
+            continue
+        lines.extend(_flush_redacted_run(run, ctx))
+        run = []
+        lines.append(format_line(message, ctx=ctx, hide_acis=hide_acis))
+    lines.extend(_flush_redacted_run(run, ctx))
     return lines
 
 
@@ -191,6 +236,10 @@ def format_transcript_preamble(
         lines.append(
             f"Redacted: {redacted} of {count} lines are [redacted] "
             "(some members have not opted in; do not guess their content)."
+        )
+        lines.append(
+            "Consecutive redacted messages may be collapsed into one range line like "
+            "'[start → end] (N redacted messages)'."
         )
     return "\n".join(lines)
 

@@ -7,6 +7,7 @@ from sigsummerrise.collect import (
     format_summarize_user_block,
     format_transcript_preamble,
     format_window,
+    format_window_from_ids,
     resolve_mentions,
     signal_ts_seconds,
 )
@@ -96,6 +97,60 @@ def test_redaction_is_unlabeled():
     assert lines[0].endswith("[redacted]")
     assert lines[1].endswith("Bob: hi")
     assert "Alice" not in format_line(hole)
+
+
+def test_format_window_collapses_consecutive_holes():
+    holes = [StoredMessage(id=i, sender_aci=None, ts=i * 1000, body=None, is_hole=True) for i in (1, 2, 3)]
+    body = StoredMessage(id=4, sender_aci="a", ts=4000, body="hi", is_hole=False, display_name="Bob")
+    lines = format_window([*holes, body])
+    assert lines == [
+        "[1970-01-01 00:16 → 00:50] (3 redacted messages)",
+        "[1970-01-01 01:06] Bob: hi",
+    ]
+
+
+def test_format_window_keeps_single_hole_per_line():
+    hole = StoredMessage(id=1, sender_aci=None, ts=1000, body=None, is_hole=True)
+    body = StoredMessage(id=2, sender_aci="a", ts=2000, body="hi", is_hole=False, display_name="Bob")
+    lines = format_window([hole, body])
+    assert lines == [
+        "[1970-01-01 00:16] [redacted]",
+        "[1970-01-01 00:33] Bob: hi",
+    ]
+
+
+def test_format_window_range_spans_days():
+    # > 100_000_000_000 means milliseconds; these are two days apart
+    holes = [
+        StoredMessage(id=1, sender_aci=None, ts=1_631_458_508_000, body=None, is_hole=True),
+        StoredMessage(id=2, sender_aci=None, ts=1_631_544_908_000, body=None, is_hole=True),
+    ]
+    lines = format_window(holes)
+    assert lines == ["[2021-09-12 14:55 → 2021-09-13 14:55] (2 redacted messages)"]
+
+
+def test_format_window_collapses_hidden_aci_runs():
+    messages = [
+        StoredMessage(id=1, sender_aci="aaa", ts=1000, body="secret one", is_hole=False, display_name="Alice"),
+        StoredMessage(id=2, sender_aci="aaa", ts=2000, body="secret two", is_hole=False, display_name="Alice"),
+        StoredMessage(id=3, sender_aci="bbb", ts=3000, body="public", is_hole=False, display_name="Bob"),
+    ]
+    lines = format_window(messages, hide_acis=frozenset({"aaa"}))
+    assert lines == [
+        "[1970-01-01 00:16 → 00:33] (2 redacted messages)",
+        "[1970-01-01 00:50] Bob: public",
+    ]
+    assert "secret" not in "\n".join(lines)
+    assert "Alice" not in "\n".join(lines)
+
+
+def test_format_window_from_ids_collapses_missing_ids():
+    body = StoredMessage(id=3, sender_aci="a", ts=3000, body="hi", is_hole=False, display_name="Bob")
+    lines = format_window_from_ids([1, 2, 3], {3: body})
+    assert lines == [
+        "(2 redacted messages)",
+        "[1970-01-01 00:50] Bob: hi",
+    ]
 
 
 def test_signal_ts_seconds_handles_milliseconds():
