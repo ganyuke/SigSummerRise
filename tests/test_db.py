@@ -1,8 +1,25 @@
 import pytest
 
 from sigsummerrise.config import Settings
-from sigsummerrise.db import REDACTED_SUMMARY, Database, merge_message_windows
+from sigsummerrise.db import REDACTED_SUMMARY, Database, Mention, merge_message_windows
 from sigsummerrise.main import require_runtime_settings
+
+
+def test_insert_body_round_trips_mentions(tmp_db: Database):
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    mention = Mention(uuid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", start=0)
+    tmp_db.insert_body(aci, 10, "\ufffc hello", mentions=[mention])
+    stored = tmp_db.last_n_kept(1)[0]
+    assert stored.mentions == (mention,)
+
+
+def test_insert_body_without_mentions_defaults_empty(tmp_db: Database):
+    aci = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    tmp_db.upsert_user(aci, "Suisei")
+    tmp_db.insert_body(aci, 10, "hello")
+    stored = tmp_db.last_n_kept(1)[0]
+    assert stored.mentions == ()
 
 
 def test_duplicate_bodies_and_holes_are_ignored(tmp_db: Database):
@@ -153,3 +170,56 @@ def test_opt_out_anonymizes_bodies_to_holes(tmp_db: Database):
     assert row["body"] is None
     assert row["is_hole"] == 1
     assert tmp_db.count_bodies(alice) == 0
+
+
+def test_init_migrates_pre_mentions_schema(tmp_path):
+    """An old DB without mentions_json must migrate on init and keep working."""
+    import sqlcipher3
+
+    path = str(tmp_path / "legacy.db")
+    key = "unit-test-sqlcipher-key"
+    conn = sqlcipher3.dbapi2.connect(path)
+    conn.execute(f"PRAGMA key = '{key}'")
+    conn.execute("PRAGMA cipher_compatibility = 4")
+    conn.executescript(
+        """
+        CREATE TABLE users (
+            aci TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL DEFAULT '',
+            consent_state TEXT NOT NULL DEFAULT 'unknown',
+            opted_in_at INTEGER,
+            last_consent_dm_at INTEGER
+        );
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_aci TEXT,
+            ts INTEGER NOT NULL,
+            body TEXT,
+            is_hole INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    conn.execute(
+        "INSERT INTO users (aci, display_name, consent_state) VALUES (?, ?, 'opted_in')",
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "Alice"),
+    )
+    conn.execute(
+        "INSERT INTO messages (sender_aci, ts, body, is_hole) VALUES (?, 10, 'old body', 0)",
+        ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",),
+    )
+    conn.commit()
+    conn.close()
+
+    db = Database(path, key)
+    db.init()
+    try:
+        stored = db.last_n_kept(10)[0]
+        assert stored.body == "old body"
+        assert stored.mentions == ()
+        alice = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+        mention = Mention(uuid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", start=0)
+        db.insert_body(alice, 11, "\ufffc new", mentions=[mention])
+        stored = db.last_n_kept(1)[0]
+        assert stored.mentions == (mention,)
+    finally:
+        db.close()

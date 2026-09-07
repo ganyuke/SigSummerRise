@@ -6,7 +6,7 @@ import pytest
 from sigsummerrise import llm
 from sigsummerrise.bot import Bot
 from sigsummerrise.commands import help_text
-from sigsummerrise.db import REDACTED_SUMMARY
+from sigsummerrise.db import REDACTED_SUMMARY, Mention
 from sigsummerrise.prompts import format_current_time, get_prompts, render_system_prompt
 from sigsummerrise.responses import get_responses
 from sigsummerrise.signal_rpc import IncomingMessage
@@ -1082,3 +1082,93 @@ async def test_ask_does_not_send_inline_quote_for_unknown_author(tmp_db, setting
     assert captured
     assert "leaked-inline-quote" not in captured[0]
     assert "Quoted message (not stored)" not in captured[0]
+
+
+@pytest.mark.asyncio
+async def test_ask_resolves_mentions_for_opted_in_and_redacts_unopted(
+    tmp_db, settings, monkeypatch
+):
+    captured: list[str] = []
+
+    async def fake_complete(settings, db, system, user, **kwargs):
+        captured.append(user)
+        return "answer"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    asker = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    bob = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    carol = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    tmp_db.upsert_user(asker, "Suisei")
+    tmp_db.upsert_user(bob, "Bob")
+    tmp_db.upsert_user(carol, "Carol")
+    tmp_db.opt_in(asker, 1)
+    tmp_db.opt_in(bob, 1)
+    # Carol never opted in
+
+    incoming = _msg(
+        sender_aci=asker,
+        text="\ufffc and \ufffc: what did everyone say",
+        mentioned_uuids=[settings.signal_bot_aci, bob, carol],
+        mentions=(
+            Mention(uuid=bob, start=0),
+            Mention(uuid=carol, start=6),
+        ),
+        timestamp=300,
+    )
+    await bot.handle(incoming)
+
+    assert captured
+    assert "Bob" in captured[0]
+    assert "[redacted] and [redacted]" not in captured[0]
+    assert "[redacted]: what did everyone say" in captured[0]
+    assert "\ufffc" not in captured[0]
+    # Stored body keeps the placeholder; rendering resolves at LLM time
+    stored = tmp_db.last_n_kept(1)[0]
+    assert stored.body == "\ufffc and \ufffc: what did everyone say"
+    assert stored.mentions == (Mention(uuid=bob, start=0), Mention(uuid=carol, start=6))
+
+
+@pytest.mark.asyncio
+async def test_collected_body_renders_mentions_for_opted_in_only(
+    tmp_db, settings, monkeypatch
+):
+    captured: list[str] = []
+
+    async def fake_complete(settings, db, system, user, **kwargs):
+        captured.append(user)
+        return "summary"
+
+    monkeypatch.setattr("sigsummerrise.bot.llm.complete", fake_complete)
+    signal = FakeSignal()
+    bot = Bot(settings, tmp_db, signal)
+    speaker = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    bob = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    carol = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    tmp_db.upsert_user(speaker, "Ann")
+    tmp_db.upsert_user(bob, "Bob")
+    tmp_db.upsert_user(carol, "Carol")
+    tmp_db.opt_in(speaker, 1)
+    tmp_db.opt_in(bob, 1)
+    # Carol unopted
+
+    await bot.handle(
+        _msg(
+            sender_aci=speaker,
+            text="\ufffc \ufffc meeting now",
+            mentions=(Mention(uuid=bob, start=0), Mention(uuid=carol, start=2)),
+            timestamp=100,
+        )
+    )
+
+    await bot.handle(
+        _msg(
+            sender_aci=speaker,
+            text="@grok summarize the past 5 messages",
+            mentioned_uuids=[settings.signal_bot_aci],
+            timestamp=101,
+        )
+    )
+    assert captured
+    assert "Suisei: Bob [redacted] meeting now" in captured[0]

@@ -11,6 +11,7 @@ from urllib.parse import urljoin
 
 import httpx
 
+from sigsummerrise.db import Mention
 from sigsummerrise.signal_format import markdown_to_signal
 
 log = logging.getLogger("sigsummerrise.signal")
@@ -36,6 +37,7 @@ class IncomingMessage:
     remote_delete_timestamp: int | None = None
     admin_delete_target_aci: str | None = None
     admin_delete_timestamp: int | None = None
+    mentions: tuple[Mention, ...] = ()
 
     @property
     def is_dm(self) -> bool:
@@ -79,6 +81,48 @@ def quote_preview(text: str, max_len: int = 200) -> str:
     if len(preview) <= max_len:
         return preview
     return preview[: max_len - 1] + "…"
+
+
+def utf16_index_to_codepoint_index(text: str, utf16_index: int) -> int:
+    """Convert a UTF-16 code unit offset into a Python code point offset.
+
+    signal-cli reports mention start/length in UTF-16 units; Python strings
+    are indexed by code points, and astral characters (emoji) count as two
+    UTF-16 units but one Python character.
+    """
+    if utf16_index <= 0:
+        return 0
+    units = 0
+    for index, char in enumerate(text):
+        if units >= utf16_index:
+            return index
+        units += 2 if ord(char) > 0xFFFF else 1
+    return len(text)
+
+
+def _parse_mentions(
+    data: dict[str, Any], text: str
+) -> tuple[Mention, ...]:
+    placeholder = text.find("\ufffc")
+    mentions: list[Mention] = []
+    for item in data.get("mentions") or []:
+        if not isinstance(item, dict):
+            continue
+        uid = item.get("uuid") or item.get("aci")
+        if not uid:
+            continue
+        start: int | None
+        raw_start = item.get("start")
+        try:
+            start = utf16_index_to_codepoint_index(text, int(raw_start)) if raw_start is not None else None
+        except (TypeError, ValueError):
+            start = None
+        if start is None:
+            start = placeholder
+        if start < 0 or start >= len(text) or text[start] != "\ufffc":
+            continue
+        mentions.append(Mention(uuid=str(uid).strip().lower(), start=start))
+    return tuple(mentions)
 
 
 def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
@@ -125,6 +169,8 @@ def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
     text = data.get("message") or data.get("text") or ""
     if text is None:
         text = ""
+    text = str(text)
+    mention_entries = _parse_mentions(data, text)
     try:
         timestamp = int(data.get("timestamp") or envelope.get("timestamp") or 0)
     except (TypeError, ValueError):
@@ -164,6 +210,7 @@ def parse_receive(payload: dict[str, Any]) -> IncomingMessage | None:
         remote_delete_timestamp=remote_delete_ts,
         admin_delete_target_aci=admin_target_aci,
         admin_delete_timestamp=admin_delete_ts,
+        mentions=mention_entries,
     )
 
 

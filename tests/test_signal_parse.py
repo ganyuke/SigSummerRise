@@ -9,6 +9,7 @@ from sigsummerrise.signal_rpc import (
     quote_preview,
     _send_timestamp,
 )
+from sigsummerrise.db import Mention
 
 
 SAMPLE = {
@@ -138,6 +139,92 @@ def test_parse_admin_delete():
     incoming = parse_receive(payload)
     assert incoming is not None
     assert incoming.deleted_message == ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", 150)
+
+
+def test_parse_mention_positions():
+    payload = {
+        "method": "receive",
+        "params": {
+            "envelope": {
+                "sourceUuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "sourceName": "Suisei",
+                "timestamp": 400,
+                "dataMessage": {
+                    "timestamp": 400,
+                    "message": "\ufffc \ufffc hi",
+                    "expiresInSeconds": 0,
+                    "mentions": [
+                        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "start": 0, "length": 1},
+                        {"uuid": "cccccccc-cccc-cccc-cccc-cccccccccccc", "start": 2, "length": 1},
+                    ],
+                    "groupInfo": {"groupId": "abc123=="},
+                },
+            }
+        },
+    }
+    incoming = parse_receive(payload)
+    assert incoming is not None
+    assert incoming.mentions == (
+        Mention(uuid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", start=0),
+        Mention(uuid="cccccccc-cccc-cccc-cccc-cccccccccccc", start=2),
+    )
+    assert incoming.mentioned_uuids == [
+        "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "cccccccc-cccc-cccc-cccc-cccccccccccc",
+    ]
+
+
+def test_parse_mention_offset_after_emoji_is_codepoint_based():
+    # signal-cli reports offsets in UTF-16 units; the poop emoji (U+1F4A9)
+    # is 2 UTF-16 units but 1 Python character, so a mention at UTF-16 index 2
+    # is code point index 1.
+    payload = {
+        "method": "receive",
+        "params": {
+            "envelope": {
+                "sourceUuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "sourceName": "Suisei",
+                "timestamp": 401,
+                "dataMessage": {
+                    "timestamp": 401,
+                    "message": "\U0001f4a9\ufffc",
+                    "expiresInSeconds": 0,
+                    "mentions": [
+                        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "start": 2, "length": 1}
+                    ],
+                    "groupInfo": {"groupId": "abc123=="},
+                },
+            }
+        },
+    }
+    incoming = parse_receive(payload)
+    assert incoming is not None
+    assert incoming.mentions == (Mention(uuid="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", start=1),)
+
+
+def test_parse_mention_without_matching_placeholder_is_dropped():
+    payload = {
+        "method": "receive",
+        "params": {
+            "envelope": {
+                "sourceUuid": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+                "sourceName": "Suisei",
+                "timestamp": 402,
+                "dataMessage": {
+                    "timestamp": 402,
+                    "message": "no mention here",
+                    "expiresInSeconds": 0,
+                    "mentions": [
+                        {"uuid": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "start": 0, "length": 1}
+                    ],
+                    "groupInfo": {"groupId": "abc123=="},
+                },
+            }
+        },
+    }
+    incoming = parse_receive(payload)
+    assert incoming is not None
+    assert incoming.mentions == ()
 
 
 def test_send_timestamp_nested_shapes():

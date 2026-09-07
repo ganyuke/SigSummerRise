@@ -6,7 +6,7 @@ import threading
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Sequence, TypeVar
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS messages (
     sender_aci TEXT,
     ts INTEGER NOT NULL,
     body TEXT,
-    is_hole INTEGER NOT NULL DEFAULT 0
+    is_hole INTEGER NOT NULL DEFAULT 0,
+    mentions_json TEXT NOT NULL DEFAULT '[]'
 );
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
 CREATE INDEX IF NOT EXISTS idx_messages_sender ON messages(sender_aci);
@@ -137,6 +138,18 @@ class User:
         return self.opt_out_pending_until is not None and self.opt_out_pending_until > now
 
 
+@dataclass(frozen=True)
+class Mention:
+    """Mention placeholder in a message body, keyed by position.
+
+    start is the offset of the U+FFFC placeholder in Python code points
+    (converted from signal-cli's UTF-16 units at parse time).
+    """
+
+    uuid: str
+    start: int
+
+
 @dataclass
 class StoredMessage:
     id: int
@@ -145,6 +158,7 @@ class StoredMessage:
     body: str | None
     is_hole: bool
     display_name: str | None = None
+    mentions: tuple[Mention, ...] = ()
 
 
 @dataclass
@@ -165,6 +179,7 @@ class ThreadEntry:
     body: str
     ts: int
     display_name: str | None = None
+    mentions: tuple[Mention, ...] = ()
 
 
 @dataclass
@@ -288,6 +303,9 @@ class Database:
             )
         if "opt_out_pending_until" not in cols:
             conn.execute("ALTER TABLE users ADD COLUMN opt_out_pending_until INTEGER")
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+        if "mentions_json" not in cols:
+            conn.execute("ALTER TABLE messages ADD COLUMN mentions_json TEXT NOT NULL DEFAULT '[]'")
         summary_cols = {row[1] for row in conn.execute("PRAGMA table_info(summaries)").fetchall()}
         if "kind" not in summary_cols:
             conn.execute(
@@ -552,10 +570,23 @@ class Database:
         return frozenset(row["aci"] for row in rows)
 
     @_serialized
-    def insert_body(self, sender_aci: str, ts: int, body: str) -> int:
+    def opted_in_users(self) -> list[User]:
+        rows = self.connect().execute(
+            "SELECT * FROM users WHERE consent_state = 'opted_in'"
+        ).fetchall()
+        return [self.get_user(row["aci"]) for row in rows]  # type: ignore[misc]
+
+    @_serialized
+    def insert_body(
+        self,
+        sender_aci: str,
+        ts: int,
+        body: str,
+        mentions: Sequence[Mention] | None = None,
+    ) -> int:
         cur = self.connect().execute(
-            "INSERT OR IGNORE INTO messages (sender_aci, ts, body, is_hole) VALUES (?, ?, ?, 0)",
-            (sender_aci, ts, body),
+            "INSERT OR IGNORE INTO messages (sender_aci, ts, body, is_hole, mentions_json) VALUES (?, ?, ?, 0, ?)",
+            (sender_aci, ts, body, _mentions_to_json(mentions)),
         )
         self.connect().commit()
         if cur.rowcount == 0:
@@ -577,7 +608,7 @@ class Database:
     def last_n_kept(self, n: int) -> list[StoredMessage]:
         rows = self.connect().execute(
             """
-            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, m.mentions_json, u.display_name
             FROM messages m
             LEFT JOIN users u ON u.aci = m.sender_aci
             ORDER BY m.ts DESC, m.id DESC
@@ -596,7 +627,7 @@ class Database:
         placeholders = ",".join("?" * len(ids))
         rows = self.connect().execute(
             f"""
-            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, m.mentions_json, u.display_name
             FROM messages m
             LEFT JOIN users u ON u.aci = m.sender_aci
             WHERE m.id IN ({placeholders})
@@ -609,7 +640,7 @@ class Database:
     def get_message_at(self, sender_aci: str, ts: int) -> StoredMessage | None:
         row = self.connect().execute(
             """
-            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, m.mentions_json, u.display_name
             FROM messages m
             LEFT JOIN users u ON u.aci = m.sender_aci
             WHERE m.sender_aci = ? AND m.ts = ?
@@ -625,7 +656,7 @@ class Database:
         conn = self.connect()
         before_rows = conn.execute(
             """
-            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, m.mentions_json, u.display_name
             FROM messages m
             LEFT JOIN users u ON u.aci = m.sender_aci
             WHERE m.ts < ?
@@ -636,7 +667,7 @@ class Database:
         ).fetchall()
         center_rows = conn.execute(
             """
-            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, m.mentions_json, u.display_name
             FROM messages m
             LEFT JOIN users u ON u.aci = m.sender_aci
             WHERE m.ts = ?
@@ -646,7 +677,7 @@ class Database:
         ).fetchall()
         after_rows = conn.execute(
             """
-            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, u.display_name
+            SELECT m.id, m.sender_aci, m.ts, m.body, m.is_hole, m.mentions_json, u.display_name
             FROM messages m
             LEFT JOIN users u ON u.aci = m.sender_aci
             WHERE m.ts > ?
@@ -1193,7 +1224,34 @@ def merge_message_windows(
     return sorted(anchor_part + recent_part, key=lambda message: (message.ts, message.id))
 
 
+def _mentions_to_json(mentions: Sequence[Mention] | None) -> str:
+    if not mentions:
+        return "[]"
+    payload = [{"uuid": m.uuid, "start": m.start} for m in mentions if m.uuid]
+    return json.dumps(payload)
+
+
+def _mentions_from_json(value: Any) -> tuple[Mention, ...]:
+    try:
+        data = json.loads(value) if value else []
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(data, list):
+        return ()
+    mentions: list[Mention] = []
+    for item in data:
+        if isinstance(item, dict) and item.get("uuid"):
+            try:
+                start = int(item.get("start", -1))
+            except (TypeError, ValueError):
+                start = -1
+            mentions.append(Mention(uuid=str(item["uuid"]).strip().lower(), start=start))
+    return tuple(mentions)
+
+
 def _message_from_row(row: Any) -> StoredMessage:
+    keys = row.keys()
+    raw_mentions = row["mentions_json"] if "mentions_json" in keys else None
     return StoredMessage(
         id=row["id"],
         sender_aci=row["sender_aci"],
@@ -1201,4 +1259,5 @@ def _message_from_row(row: Any) -> StoredMessage:
         body=row["body"],
         is_hole=bool(row["is_hole"]),
         display_name=row["display_name"],
+        mentions=_mentions_from_json(raw_mentions),
     )

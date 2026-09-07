@@ -7,9 +7,10 @@ from sigsummerrise.collect import (
     format_summarize_user_block,
     format_transcript_preamble,
     format_window,
+    resolve_mentions,
     signal_ts_seconds,
 )
-from sigsummerrise.db import StoredMessage, ThreadEntry
+from sigsummerrise.db import Mention, StoredMessage, ThreadEntry
 
 
 def test_skip_disappearing():
@@ -177,3 +178,65 @@ def test_format_followup_user_block_uses_bot_name():
     assert "Asked by: Suisei" in block
     assert "grok: because" in block
     assert "Follow-up thread:" in block
+
+
+def test_resolve_mentions_renders_opted_in_names():
+    ctx = LlmFormatContext(mention_names={"uuid-1": "Bob", "bot-uuid": "grok"})
+    body = f"\ufffc and \ufffc say hi"
+    resolved = resolve_mentions(
+        body,
+        [Mention(uuid="uuid-1", start=0), Mention(uuid="bot-uuid", start=6)],
+        ctx=ctx,
+    )
+    assert resolved == "Bob and grok say hi"
+
+
+def test_resolve_mentions_redacts_unopted_and_unknown():
+    ctx = LlmFormatContext(mention_names={})
+    body = "\ufffc waved"
+    resolved = resolve_mentions(body, [Mention(uuid="uuid-1", start=0)], ctx=ctx)
+    assert resolved == "[redacted] waved"
+    assert "\ufffc" not in resolved
+    # No metadata at all -> still redacted, never raw placeholder
+    assert resolve_mentions(body, [], ctx=ctx) == "[redacted] waved"
+
+
+def test_resolve_mentions_placeholder_without_position_metadata():
+    ctx = LlmFormatContext(mention_names={"uuid-1": "Bob"})
+    resolved = resolve_mentions("\ufffc waved", [], ctx=ctx)
+    assert resolved == "[redacted] waved"
+
+
+def test_resolve_mentions_ignores_stale_positions():
+    ctx = LlmFormatContext(mention_names={"uuid-1": "Bob"})
+    body = "xx\ufffc"
+    resolved = resolve_mentions(body, [Mention(uuid="uuid-1", start=0)], ctx=ctx)
+    assert resolved == "xx[redacted]"
+
+
+def test_resolve_mentions_handles_astral_characters():
+    # Mention offset was measured in UTF-16 units and converted at parse time
+    ctx = LlmFormatContext(mention_names={"uuid-1": "Bob"})
+    body = "\U0001f4a9\ufffc"
+    resolved = resolve_mentions(body, [Mention(uuid="uuid-1", start=1)], ctx=ctx)
+    assert resolved == "\U0001f4a9Bob"
+
+
+def test_format_line_renders_mentions():
+    message = StoredMessage(
+        id=1,
+        sender_aci="a",
+        ts=10,
+        body="\ufffc hi",
+        is_hole=False,
+        display_name="Ann",
+        mentions=(Mention(uuid="uuid-1", start=0),),
+    )
+    ctx = LlmFormatContext(mention_names={"uuid-1": "Bob"})
+    assert format_line(message, ctx=ctx).endswith("Ann: Bob hi")
+    assert format_line(message, ctx=LlmFormatContext()).endswith("Ann: [redacted] hi")
+
+
+def test_format_line_without_mentions_unchanged():
+    message = StoredMessage(id=1, sender_aci="a", ts=10, body="plain hi", is_hole=False, display_name="Ann")
+    assert format_line(message, ctx=LlmFormatContext()).endswith("Ann: plain hi")

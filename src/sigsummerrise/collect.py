@@ -1,17 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Sequence
 from zoneinfo import ZoneInfo
 
-from sigsummerrise.db import StoredMessage, ThreadEntry
+from sigsummerrise.db import Mention, StoredMessage, ThreadEntry
+
+MENTION_PLACEHOLDER = "\ufffc"
 
 
 @dataclass(frozen=True)
 class LlmFormatContext:
     tz_name: str = "UTC"
     bot_name: str = "Assistant"
+    # uuid -> display name for opted-in members only; unopted members are
+    # deliberately absent so their mentions render as [redacted].
+    mention_names: Mapping[str, str] = MappingProxyType({})
 
 
 def classify_inbound(
@@ -57,6 +64,31 @@ def _display_name(name: str | None) -> str:
     return (name or "").strip() or "Someone"
 
 
+def resolve_mentions(
+    body: str | None,
+    mentions: Sequence[Mention],
+    *,
+    ctx: LlmFormatContext | None = None,
+) -> str | None:
+    """Replace mention placeholders with opted-in members' display names.
+
+    Placeholders that do not resolve to a name in ctx.mention_names render
+    as [redacted].
+    """
+    if body is None or MENTION_PLACEHOLDER not in body:
+        return body
+    ctx = ctx or LlmFormatContext()
+    by_start = {mention.start: mention.uuid.lower() for mention in mentions}
+    parts: list[str] = []
+    for index, char in enumerate(body):
+        if char != MENTION_PLACEHOLDER:
+            parts.append(char)
+            continue
+        name = ctx.mention_names.get(by_start.get(index, ""))
+        parts.append(name or "[redacted]")
+    return "".join(parts)
+
+
 def _is_redacted(
     message: StoredMessage | None,
     *,
@@ -79,7 +111,8 @@ def format_line(
     stamp = f"[{format_message_timestamp(message.ts, ctx.tz_name)}] "
     if _is_redacted(message, hide_acis=hide_acis):
         return f"{stamp}[redacted]"
-    return f"{stamp}{_display_name(message.display_name)}: {message.body}"
+    body = resolve_mentions(message.body, message.mentions, ctx=ctx)
+    return f"{stamp}{_display_name(message.display_name)}: {body}"
 
 
 def format_window(
@@ -114,10 +147,11 @@ def format_thread(entries: list[ThreadEntry], *, ctx: LlmFormatContext | None = 
     lines: list[str] = []
     for entry in entries:
         stamp = f"[{format_message_timestamp(entry.ts, ctx.tz_name)}] "
+        body = resolve_mentions(entry.body, entry.mentions, ctx=ctx)
         if entry.sender_aci is None:
-            lines.append(f"{stamp}{ctx.bot_name}: {entry.body}")
+            lines.append(f"{stamp}{ctx.bot_name}: {body}")
         else:
-            lines.append(f"{stamp}{_display_name(entry.display_name)}: {entry.body}")
+            lines.append(f"{stamp}{_display_name(entry.display_name)}: {body}")
     return lines
 
 

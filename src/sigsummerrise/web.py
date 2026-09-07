@@ -295,7 +295,7 @@ async def _live_stream(
     aci: str,
     *,
     request: Request | None = None,
-    shutdown_event: asyncio.Event,  # Inject global shutdown_event
+    shutdown_event: asyncio.Event | None = None,  # Inject global shutdown_event
 ) -> AsyncIterator[str]:
     disconnect = asyncio.Event()
     watcher: asyncio.Task[None] | None = None
@@ -315,7 +315,7 @@ async def _live_stream(
         heartbeat_at = time.monotonic()
         
         while True:
-            if shutdown_event.is_set() or activity.is_shutting_down():
+            if shutdown_event is not None and shutdown_event.is_set() or activity.is_shutting_down():
                 yield _reconnect_sse()
                 break
             if disconnect.is_set():
@@ -424,7 +424,9 @@ def mount_routes(app: FastAPI) -> None:
     async def api_live_stream(request: Request):
         settings: Settings = request.app.state.settings
         db: Database = request.app.state.db
-        shutdown_event: asyncio.Event = request.app.state.shutdown_event
+        shutdown_event: asyncio.Event | None = getattr(
+            request.app.state, "shutdown_event", None
+        )
 
         now = int(time.time())
         aci = session_aci(request, db, settings, now)

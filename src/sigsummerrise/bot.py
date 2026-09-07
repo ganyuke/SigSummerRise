@@ -166,7 +166,12 @@ class Bot:
             has_attachments_only=incoming.has_attachments_only,
         )
         if action == "body":
-            self.db.insert_body(incoming.sender_aci, incoming.timestamp, incoming.text.strip())
+            self.db.insert_body(
+                incoming.sender_aci,
+                incoming.timestamp,
+                incoming.text.strip(),
+                mentions=incoming.mentions,
+            )
             activity.notify("snapshot")
         elif action == "hole":
             self.db.insert_hole(incoming.timestamp)
@@ -330,11 +335,31 @@ class Bot:
             return
         await self._reply(incoming, help_text(), in_group)
 
-    def _llm_ctx(self) -> collect.LlmFormatContext:
+    def _llm_ctx(self, asker: IncomingMessage | None = None) -> collect.LlmFormatContext:
         return collect.LlmFormatContext(
             tz_name=self.settings.bot_timezone,
             bot_name=self.settings.bot_name,
+            mention_names=self._mention_names(asker),
         )
+
+    def _mention_names(self, asker: IncomingMessage | None) -> dict[str, str]:
+        """Map mention uuids to names for opted-in members only.
+
+        Unopted members are left unmapped so their mentions render as
+        [redacted] in LLM context.
+        """
+        names: dict[str, str] = {}
+        if self.bot_aci:
+            names[self.bot_aci.lower()] = self.settings.bot_name
+        for user in self.db.opted_in_users():
+            name = (user.display_name or "").strip()
+            if name:
+                names[user.aci.strip().lower()] = name
+        if asker is not None:
+            name = (asker.display_name or "").strip()
+            if name:
+                names[asker.sender_aci.strip().lower()] = name
+        return names
 
     def _llm_system(self, template: str, now: int) -> str:
         return render_system_prompt(
@@ -432,7 +457,8 @@ class Bot:
         if not self._allow_llm(incoming.sender_aci, now):
             await self._reply_rate_limited(incoming, True)
             return
-        question = normalize_command_text(incoming.text)
+        question = collect.resolve_mentions(incoming.text, incoming.mentions, ctx=self._llm_ctx(incoming))
+        question = normalize_command_text(question or "")
         if not question:
             await self._reply(incoming, help_text(), bool(incoming.group_id))
             return
@@ -443,7 +469,7 @@ class Bot:
             context_n=context_n,
             max_n=self._max_n(),
         )
-        ctx = self._llm_ctx()
+        ctx = self._llm_ctx(incoming)
         hide_acis = self.db.exclude_acis("ask", incoming.sender_aci)
         user_block = collect.format_ask_user_block(
             question=question,
@@ -511,7 +537,7 @@ class Bot:
         if not self._allow_llm(incoming.sender_aci, now):
             await self._reply_rate_limited(incoming, True)
             return
-        ctx = self._llm_ctx()
+        ctx = self._llm_ctx(incoming)
         hide_acis = self.db.exclude_acis("summarize", incoming.sender_aci)
         user_block = collect.format_summarize_user_block(kept, ctx=ctx, hide_acis=hide_acis)
         group_id = incoming.group_id or self.settings.signal_group_id
@@ -542,7 +568,10 @@ class Bot:
         if not self._allow_llm(incoming.sender_aci, now):
             await self._reply_rate_limited(incoming, True)
             return
-        question = incoming.text.strip()
+        question = collect.resolve_mentions(
+            incoming.text, incoming.mentions, ctx=self._llm_ctx(incoming)
+        )
+        question = (question or "").strip()
         self.db.add_thread(summary.id, incoming.sender_aci, question, incoming.timestamp)
         by_id = self.db.get_messages_by_ids(summary.window_ids)
         thread_entries = self.db.get_thread(summary.id)
@@ -554,7 +583,7 @@ class Bot:
             by_id=by_id,
             thread_entries=thread_entries,
             asker_name=self._asker_name(incoming),
-            ctx=self._llm_ctx(),
+            ctx=self._llm_ctx(incoming),
             hide_acis=hide_acis,
         )
         group_id = incoming.group_id or self.settings.signal_group_id
